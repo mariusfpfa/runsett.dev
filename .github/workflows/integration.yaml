@@ -1,0 +1,41 @@
+name: Durable JavaScript milestone
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  real-compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: docker compose -f deploy/compose.yaml config
+      - run: docker compose -f deploy/compose.yaml up -d --wait --wait-timeout 180
+      # One job, serial suites: real Docker and Temporal/Postgres, no absent-service skips.
+      - run: |
+          mkdir -p artifacts
+          npm run test:integration 2>&1 | tee artifacts/integration.log
+        env:
+          NO_PROXY: localhost,127.0.0.1,::1
+          no_proxy: localhost,127.0.0.1,::1
+          RUNSETT_EVIDENCE_DIR: artifacts/recovery
+      - if: always()
+        run: |
+          mkdir -p artifacts
+          docker compose -f deploy/compose.yaml ps > artifacts/compose-ps.log
+          docker compose -f deploy/compose.yaml logs --no-color > artifacts/compose.log
+          docker ps -a --filter label=runsett.managed=true > artifacts/runner-containers.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-javascript-evidence
+          path: artifacts
+      - if: always()
+        run: docker compose -f deploy/compose.yaml down -v

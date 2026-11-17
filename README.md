@@ -30,12 +30,12 @@ are in the [runtime README](packages/runtime/README.md) and
 ```sh
 npm run typecheck
 npm test
-npm run test:cli
-npm run test:temporal
-npm run test:runner
+npm run test:integration
 ```
 
-Integration tests require real running Temporal and Docker and fail if missing.
+Integration tests require real running Temporal/PostgreSQL Compose services and Docker, fail if missing, and run suites in series.
+See [reliability evidence](docs/reliability.md) and [operations](docs/operations.md)
+for failure boundaries, deployment retention and remaining production gates.
 This first milestone implements the durable JavaScript vertical slice;
 connectors, webhooks, shared artifact hosting and a custom graphical debugger
 remain future work.

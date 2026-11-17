@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';
+import { before, after, test } from 'node:test';
+import { createHarness, until, type Harness } from '../fixtures/worker-controller.js';
+let h: Harness;
+before(async () => { h = await createHarness('versioning', ['1', '2']); });
+after(async () => { await h?.close(); });
+test('live v2 handles new runs while absent v1 waits visibly and resumes original immutable code', { timeout: 90000 }, async () => {
+  const v1 = await h.worker(h.deployments[0]);
+  const original = await h.start({ waitMs: 30000, second: true });
+  await until(async () => (await h.inspect(original.workflowId)).wait?.reason === 'durable-timer', 'v1 durable timer');
+  const v2 = await h.worker(h.deployments[1]);
+  const newer = await h.start({}, h.deployments[1]);
+  assert.equal((await h.inspect(original.workflowId)).wait?.reason, 'durable-timer', 'old worker must still be sleeping at the kill boundary');
+  await h.kill(v1); const killedAt = Date.now();
+  assert.equal((await newer.handle.result()).version, '2');
+  await until(async () => (await original.handle.fetchHistory()).events!.some(event => event.timerFiredEventAttributes), 'Temporal fires v1 timer without v1 process', 45000);
+  // A second v2 result provides a positive live-worker gate while v1's task is pending.
+  const stillLive = await h.start({}, h.deployments[1]); assert.equal((await stillLive.handle.result()).version, '2');
+  const waiting = await h.inspect(original.workflowId);
+  assert.equal(waiting.state, 'RUNNING'); assert.equal(waiting.deployment.version, '1');
+  assert.equal(waiting.wait?.reason, 'activity-or-workflow-task');
+  assert.equal(waiting.steps.length, 1); assert.equal(waiting.steps[0]?.state, 'COMPLETED');
+  assert.equal(h.receiver.attempts.filter(item => item.tag === `${original.workflowId}:second`).length, 0);
+  assert.notEqual((await original.handle.describe()).taskQueue, (await newer.handle.describe()).taskQueue);
+  await h.evidence('old-worker-absent', { workflowId: original.workflowId, knownKilledPid: v1.pid, liveV2Pid: v2.pid, waiting, observation: 'Controlled old process absent; no permanent poller absence inferred' });
+  const restored = await h.worker(await h.registry.read(h.deployments[0]!.deploymentId));
+  const result = await original.handle.result(); assert.equal(result.version, '1');
+  assert.equal(h.receiver.attempts.filter(item => item.tag === `${original.workflowId}:first`).length, 1);
+  await h.evidence('original-code-restored', { workflowId: original.workflowId, recoveryMs: Date.now() - killedAt, selectedVersion: result.version, liveNewVersion: '2' });
+  await h.kill(restored); await h.kill(v2);
+});

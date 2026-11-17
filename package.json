@@ -20,7 +20,8 @@
     "test:runner": "npm run build && node --import tsx --test tests/unit/runner.test.ts tests/integration/runner-container.test.ts",
     "test:temporal": "npm run build && node --import tsx --test tests/integration/temporal.test.ts",
     "test:cli": "npm run build && node --import tsx --test tests/integration/cli.test.ts",
-    "example:register": "node --import tsx examples/javascript/register.ts"
+    "example:register": "node --import tsx examples/javascript/register.ts",
+    "test:integration": "npm run build && node scripts/test-integration.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
