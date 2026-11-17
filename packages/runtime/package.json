@@ -4,5 +4,22 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=24 <25" }
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@runsett/contracts": "0.1.0",
+    "@runsett/runner": "0.1.0",
+    "@runsett/sdk": "0.1.0",
+    "@temporalio/activity": "1.26.0",
+    "@temporalio/client": "1.26.0",
+    "@temporalio/common": "1.26.0",
+    "@temporalio/worker": "1.26.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  }
 }

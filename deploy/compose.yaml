@@ -1,0 +1,47 @@
+# Local development only: single-node Temporal and PostgreSQL, seven-day history.
+name: runsett
+services:
+  postgres:
+    image: postgres:16-bookworm@sha256:a49f7438ba03589f9b1ca062f2da82e899b48ea1dc50d2449fa09a70be83ebca
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal-development-only
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U temporal"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  temporal:
+    image: temporalio/auto-setup:1.29.1@sha256:5b3502a3b685f9eff1b925af90c57c9e3dbeccbef367cc28a2a9712c63379312
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal-development-only
+      POSTGRES_SEEDS: postgres
+      DEFAULT_NAMESPACE: default
+      DEFAULT_NAMESPACE_RETENTION: 7d
+      BIND_ON_IP: 0.0.0.0
+      # Container-to-container and local gRPC must bypass inherited proxies.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+    ports:
+      - "127.0.0.1:7233:7233"
+    healthcheck:
+      test: [CMD-SHELL, "temporal operator cluster health --address 127.0.0.1:7233"]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+volumes:
+  postgres-data:
