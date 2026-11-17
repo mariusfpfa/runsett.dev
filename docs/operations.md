@@ -40,6 +40,14 @@ Keep the Compose `postgres-data` volume, deployment registry directory, reconcil
 
 Retain each old deployment record and exact image while any run or schedule references it, including sleeping, retrying and waiting runs. Keep version 1 workers available until its work drains; version 2 workers use a distinct deployment queue and do not substitute new code for old work. Restart an old worker with its original ID and registry record. If the artifact/image is missing, restore it; rebuilding current source is not a valid recovery strategy. Verify schedules are migrated or paused before retiring their deployment.
 
+Queues bind the full registered deployment fingerprint, including the stored workflow bundle, dependencies, blocks, module image identities and network routing. Manual submissions and schedule actions retain that fingerprint in version-2 request metadata. A separate registry reusing an ID/version with changed content gets a different queue; it cannot replace the original worker. Retrying a retained workflow ID against changed content returns a conflict. Inspection reports `mismatch` when a local artifact has the original ID but different content, retaining the recorded fingerprint without attributing the replacement artifact's version to the run.
+
+### Prerelease migration boundary
+
+Runs and schedules created before fingerprint-bound routing have version-1 or absent request metadata and use the old ID/version queues. They require their original prerelease runtime workers and exact artifacts until drained. Updated workers do not poll those queues. Updated clients reject reuse of those workflow IDs, and inspection reports deployment availability as `unsupported` for legacy, missing or incomplete identity metadata while still showing available engine history. The runtime never upgrades or rebinds legacy runs from local registry contents.
+
+Before retiring old workers, pause legacy schedules with `runsett schedule pause <schedule-id>` and drain their in-flight runs using the old workers. Create replacement schedules under new schedule IDs with the updated runtime and the intended registered deployment; verify their action metadata and queue. Coordinate the cutover to avoid duplicate business occurrences. There is no automatic schedule/run migration or historical rewrite. Preserve the old runtime and artifacts for retained legacy work; do not point new code at an old queue.
+
 ## Inspect and recover
 
 Use `runsett inspect <workflow-id> --json` to see engine state, original deployment, recorded steps, active timers and audit availability. Add `--details --logs` only when payloads are needed. A pending task is visible, but this API does not prove permanent worker absence or reconstruct every retry. Compare the deployment queue with the actual process/deployment inventory.

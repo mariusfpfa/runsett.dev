@@ -31,8 +31,9 @@ export function assertRegisteredDeployment(value: RegisteredDeployment): void {
   const { fingerprint: recorded, ...definition } = value;
   if (fingerprint(normalize(definition)) !== recorded) throw new TypeError('Deployment integrity check failed');
 }
-export function taskQueueFor(deployment: Pick<RegisteredDeployment, 'deploymentId' | 'version'>): string {
-  return `runsett-${sha256(JSON.stringify([deployment.deploymentId, deployment.version]))}`;
+export function taskQueueFor(deployment: Pick<RegisteredDeployment, 'deploymentId' | 'version' | 'fingerprint'>): string {
+  if (!/^[a-f0-9]{64}$/.test(deployment.fingerprint)) throw new TypeError('Deployment fingerprint required for routing');
+  return `runsett-${sha256(JSON.stringify([deployment.deploymentId, deployment.version, deployment.fingerprint]))}`;
 }
 export class DeploymentRegistry {
   constructor(readonly directory: string) {}

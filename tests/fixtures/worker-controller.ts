@@ -54,8 +54,8 @@ export async function createHarness(suite: string, versions = ['1']) {
     const runs = createRunClient({ client, deployments: registry });
     const processes = new Set<ChildProcess>(); const activeRuns: string[] = [];
     async function evidence(name: string, data: object) { await appendFile(join(evidenceDirectory, `${suite}.jsonl`), JSON.stringify({ name, observedAt: new Date().toISOString(), ...data }) + '\n'); }
-    async function worker(deployment = deployments[0]!) {
-      const child = spawn(process.execPath, ['packages/runtime/dist/entrypoint.js'], { env: { ...process.env, RUNSETT_DEPLOYMENT_ID: deployment.deploymentId, RUNSETT_DEPLOYMENTS_DIR: registry.directory, RUNSETT_AUDIT_DIR: join(directory, 'audit') }, stdio: ['ignore', 'pipe', 'pipe'] });
+    async function worker(deployment = deployments[0]!, workerRegistry = registry) {
+      const child = spawn(process.execPath, ['packages/runtime/dist/entrypoint.js'], { env: { ...process.env, RUNSETT_DEPLOYMENT_ID: deployment.deploymentId, RUNSETT_DEPLOYMENTS_DIR: workerRegistry.directory, RUNSETT_AUDIT_DIR: join(directory, 'audit') }, stdio: ['ignore', 'pipe', 'pipe'] });
       processes.add(child); let output = '';
       const log = createWriteStream(join(evidenceDirectory, `${suite}-worker-${child.pid}.log`));
       child.stdout!.on('data', chunk => { output = (output + chunk).slice(-65536); log.write(chunk); });

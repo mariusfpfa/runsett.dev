@@ -104,7 +104,11 @@ export function createCodeExecutor(options: ExecutorOptions): CodeExecutor {
           catch (error) { lifetime.stop(failure(error instanceof RangeError ? 'OUTPUT_LIMIT' : 'INFRASTRUCTURE_ERROR', error instanceof Error ? error.message : 'Invalid diagnostics')); }
         });
         child.on('error', reject);
-        child.on('close', code => code === 0 ? resolve() : reject(new Error(`Container attach exited ${code}`)));
+        child.on('close', code => {
+          if (readyBytes < RUNNER_READY.length) reject(new Error('Container attach closed before complete readiness protocol'));
+          else if (code === 0) resolve();
+          else reject(new Error(`Container attach exited ${code}`));
+        });
       });
       // Observe failures even while the caller is waiting for readiness.
       exited.catch(error => lifetime.stop(failure('INFRASTRUCTURE_ERROR', error instanceof Error ? error.message : 'Attach failed')));

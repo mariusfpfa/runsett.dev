@@ -7,6 +7,18 @@ import { DeploymentRegistry, taskQueueFor } from '../../packages/runtime/src/ver
 import { defineBlock } from '../../packages/sdk/src/block.js';
 import { ReconciliationAudit } from '../../packages/runtime/src/audit.js';
 const deployment = { deploymentId: 'test/v1', version: '1', workflowTypes: ['sample'], workflowBundle: { code: 'exports.sample = async () => 1' }, dependencyHash: 'a'.repeat(64), blocks: [], modules: [] };
+test('same deployment names in independent registries never route changed content to the original queue', async () => {
+  const path = await mkdtemp(join(tmpdir(), 'runsett-content-routing-'));
+  try {
+    const module = { moduleId: 'operation', moduleHash: 'c'.repeat(64), path: '/opt/runsett/modules/operation.mjs', image: `sha256:${'d'.repeat(64)}` };
+    const definition = { ...deployment, modules: [module] };
+    const original = await new DeploymentRegistry(join(path, 'original')).register(definition);
+    for (const [index, change] of [{ workflowBundle: { code: 'exports.sample = async () => 2' } }, { dependencyHash: 'b'.repeat(64) }, { configuredNetwork: 'bridge' }, { modules: [{ ...module, image: `sha256:${'e'.repeat(64)}` }] }].entries()) {
+      const changed = await new DeploymentRegistry(join(path, String(index))).register({ ...definition, ...change });
+      assert.notEqual(taskQueueFor(original), taskQueueFor(changed));
+    }
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
 test('immutable deployments persist across instances, pin bundle/dependencies and reject changed IDs', async () => {
   const path = await mkdtemp(join(tmpdir(), 'runsett-registry-'));
   try {

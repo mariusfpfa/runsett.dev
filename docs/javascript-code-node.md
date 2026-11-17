@@ -43,11 +43,11 @@ The supervisor alone owns Docker lifecycle privileges. The default network is
 explicit named network pinned in the deployment. Network policy is not an
 application-level host allowlist. Do not use the host network.
 
-The optional subprocess runner is a development convenience, **not an isolation
-boundary**. Container conformance tests exercise the production-style local
-boundary. This milestone trusts workflow/module authors and is not a service for
-hostile public submissions. A subprocess test cannot establish container memory,
-filesystem, credential, process or network confinement.
+Docker is the only implemented execution backend. Container conformance tests
+exercise this local isolation boundary. This milestone trusts workflow/module
+authors and is not a service for hostile public submissions. Subprocesses used
+by protocol tests do not establish container memory, filesystem, credential,
+process or network confinement.
 
 Long waits belong in deterministic workflow code using `await context.sleep(ms)`.
 Temporal persists that timer outside the code invocation. A sleep or unawaited

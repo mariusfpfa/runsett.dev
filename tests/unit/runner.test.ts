@@ -5,8 +5,26 @@ import { BoundedChannel } from '../../packages/runner/src/protocol.js';
 import { DiagnosticCollector } from '../../packages/runner/src/diagnostics.js';
 import { createCodeExecutor } from '../../packages/runner/src/supervisor.js';
 import { DEFAULT_EXECUTION_LIMITS } from '@runsett/contracts';
+import { spawn } from 'node:child_process';
+import { RUNNER_READY } from '../../packages/runner/src/protocol.js';
 
 const entry = { moduleId: 'transform', moduleHash: 'a'.repeat(64), path: '/opt/runsett/modules/main.mjs', image: `sha256:${'b'.repeat(64)}` };
+for (const prefix of ['', RUNNER_READY.subarray(0, 5).toString()]) {
+  test(`clean attachment exit with ${prefix ? 'partial' : 'absent'} READY fails promptly as infrastructure`, async () => {
+    let removed = false;
+    const execute = createCodeExecutor({ registry: new ModuleRegistry([{ ...entry, path: '/opt/runsett/modules/main.mjs' }]), scope: 'unit-early-attachment', runtime: {
+      create: async () => 'synthetic-attachment',
+      attach: () => spawn(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(prefix)})`], { stdio: ['pipe', 'pipe', 'pipe'] }),
+      remove: async () => { removed = true; },
+    } });
+    const started = Date.now();
+    try {
+      await assert.rejects(execute({ identity: { workflowId: 'w', runId: 'r', stepId: 's', attempt: 1, operationKey: 'o', deploymentId: 'd' }, moduleId: 'transform', moduleHash: entry.moduleHash, input: null, credentialBindings: [], networkMode: 'none', limits: { ...DEFAULT_EXECUTION_LIMITS, wallClockMs: 2000 } }), { code: 'INFRASTRUCTURE_ERROR' });
+      assert.ok(Date.now() - started < 1000, 'must settle before the invocation deadline');
+      assert.equal(removed, true);
+    } finally { execute.close(); }
+  });
+}
 test('registry resolves only immutable registered module identities', () => {
   const registry = new ModuleRegistry([entry]);
   assert.deepEqual(registry.resolve(entry.moduleId, entry.moduleHash), entry);

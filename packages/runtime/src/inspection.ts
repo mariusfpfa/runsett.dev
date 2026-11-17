@@ -3,6 +3,7 @@ import { defaultPayloadConverter } from '@temporalio/common';
 import type { temporal } from '@temporalio/proto';
 import { DeploymentRegistry } from './versioning.js';
 import { inspectAudit } from './inspection-audit.js';
+import { readRequestIdentity } from './request-identity.js';
 type Payloads = temporal.api.common.v1.IPayloads | null | undefined;
 type Failure = temporal.api.failure.v1.IFailure | null | undefined;
 type Event = temporal.api.history.v1.IHistoryEvent;
@@ -22,10 +23,18 @@ export async function inspectRun(options: { client: Client; deployments: Deploym
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 1000) throw new TypeError('maxEvents must be between 1 and 1000');
   if (!Number.isSafeInteger(maxLogBytes) || maxLogBytes < 1 || maxLogBytes > 262_144) throw new TypeError('maxLogBytes must be between 1 and 262144');
   const description = await options.client.workflow.getHandle(workflowId).describe();
-  const memo = description.memo?.runsettRequest as { deploymentId?: string; workflowType?: string } | undefined;
-  let deployment: { deploymentId?: string; version?: string; availability: string } = { ...(memo?.deploymentId ? { deploymentId: memo.deploymentId } : {}), availability: 'unknown' };
-  if (memo?.deploymentId) {
-    try { const stored = await options.deployments.read(memo.deploymentId); deployment = { deploymentId: stored.deploymentId, version: stored.version, availability: 'available' }; }
+  const rawMemo = description.memo?.runsettRequest as { deploymentId?: unknown } | undefined;
+  const memo = readRequestIdentity(rawMemo);
+  let deployment: { deploymentId?: string; version?: string; fingerprint?: string; availability: string } = {
+    ...(typeof rawMemo?.deploymentId === 'string' ? { deploymentId: rawMemo.deploymentId } : {}), availability: 'unsupported',
+  };
+  if (memo) {
+    deployment = { deploymentId: memo.deploymentId, fingerprint: memo.deploymentFingerprint, availability: 'missing' };
+    try {
+      const stored = await options.deployments.read(memo.deploymentId);
+      if (stored.fingerprint === memo.deploymentFingerprint) { deployment.version = stored.version; deployment.availability = 'available'; }
+      else deployment.availability = 'mismatch';
+    }
     catch (error) { deployment.availability = (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable'; }
   }
   const steps = new Map<string, InspectionStep>(); const timers = new Map<string, string | undefined>();

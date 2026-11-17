@@ -113,6 +113,8 @@ test('real Temporal schedules use UTC, SKIP, one-hour catchup and recurring IDs 
   assert.equal(description.spec.timezone, 'UTC'); assert.equal(description.policies.overlap, 'SKIP');
   assert.equal(description.policies.catchupWindow, 3_600_000);
   assert.equal(description.action.memo!.runsettRequest && (description.action.memo!.runsettRequest as any).deploymentId, deploymentId);
+  const registered = await new DeploymentRegistry(join(directory, 'deployments')).read(deploymentId);
+  assert.equal((description.action.memo!.runsettRequest as any).deploymentFingerprint, registered.fingerprint);
   await cli(args, false);
   const ids: string[] = [];
   for (let i = 0; i < 2; i++) {
@@ -122,8 +124,13 @@ test('real Temporal schedules use UTC, SKIP, one-hour catchup and recurring IDs 
     do { recent = (await handle.describe()).info.recentActions; if (recent.length > i) break; assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 50)); } while (true);
     const execution = recent.at(-1)!.action.workflow; ids.push(execution.workflowId);
     assert.equal((await client.workflow.getHandle(execution.workflowId, execution.firstExecutionRunId).result()).attempt, 1);
+    // Manual retries and schedule occurrences use the same content-bound identity.
+    const duplicate = await cli(['run', '--id', execution.workflowId, '--deployment', deploymentId, '--workflow', 'oneStep', '--input', '{}']);
+    assert.equal(duplicate.runId, execution.firstExecutionRunId);
     const view = await cli(['inspect', execution.workflowId]);
     assert.equal(view.deployment.deploymentId, deploymentId);
+    assert.equal(view.deployment.fingerprint, registered.fingerprint);
+    assert.equal(view.deployment.availability, 'available');
     assert.ok(view.schedule.intendedAt); assert.ok(view.schedule.actualStartedAt);
     // Temporal timestamps schedule workflow IDs to distinguish occurrences, including triggers.
     await new Promise(resolve => setTimeout(resolve, 1100));

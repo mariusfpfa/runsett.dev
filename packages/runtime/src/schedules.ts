@@ -2,7 +2,8 @@ import { Client, ScheduleOverlapPolicy } from '@temporalio/client';
 import { assertJsonValue, DEFAULT_EXECUTION_LIMITS } from '@runsett/contracts';
 import type { StartRunRequest } from './client.js';
 import { DeploymentRegistry, taskQueueFor } from './versioning.js';
-import { canonicalJson, sha256 } from './storage.js';
+import { sha256 } from './storage.js';
+import { createRequestIdentity } from './request-identity.js';
 export interface CreateScheduleRequest extends Omit<StartRunRequest, 'workflowId'> { scheduleId: string; cron: string; timezone?: string }
 export function createScheduleClient(options: { client: Client; deployments: DeploymentRegistry }) {
   return {
@@ -14,14 +15,14 @@ export function createScheduleClient(options: { client: Client; deployments: Dep
       new Intl.DateTimeFormat('en-US', { timeZone: timezone });
       const deployment = await options.deployments.read(request.deploymentId);
       if (!deployment.workflowTypes.includes(request.workflowType)) throw new TypeError('Unknown workflow type for deployment');
-      const fingerprint = sha256(canonicalJson({ version: 1, deploymentId: request.deploymentId, workflowType: request.workflowType, input: request.input }));
+      const identity = createRequestIdentity(deployment, request.workflowType, request.input);
       await options.client.schedule.create({ scheduleId: request.scheduleId,
         spec: { cronExpressions: [request.cron], timezone },
         policies: { overlap: ScheduleOverlapPolicy.SKIP, catchupWindow: '1h' },
         action: { type: 'startWorkflow', workflowType: request.workflowType,
           // Temporal appends the occurrence timestamp to this namespace-isolated base.
           workflowId: `runsett-schedule-${sha256(request.scheduleId)}`, taskQueue: taskQueueFor(deployment), args: [request.input],
-          memo: { runsettRequest: { version: 1, fingerprint, deploymentId: request.deploymentId, workflowType: request.workflowType } } },
+          memo: { runsettRequest: identity } },
       });
       return { scheduleId: request.scheduleId, timezone, overlap: 'SKIP', catchupWindowMs: 3_600_000 };
     },
