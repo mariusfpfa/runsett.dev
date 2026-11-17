@@ -1,0 +1,21 @@
+{
+  "name": "runsett",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24 <25", "npm": ">=11 <12" },
+  "packageManager": "npm@11.9.0",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "tsc -p packages/contracts/tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit",
+    "test:unit": "node scripts/test-unit.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

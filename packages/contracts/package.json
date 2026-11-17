@@ -1,0 +1,15 @@
+{
+  "name": "@runsett/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=24 <25" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./json": { "types": "./dist/json.d.ts", "default": "./dist/json.js" },
+    "./execution": { "types": "./dist/execution.d.ts", "default": "./dist/execution.js" },
+    "./errors": { "types": "./dist/errors.d.ts", "default": "./dist/errors.js" },
+    "./limits": { "types": "./dist/limits.d.ts", "default": "./dist/limits.js" }
+  }
+}
