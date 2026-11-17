@@ -7,7 +7,22 @@ export interface BlockDefinition {
   effect: 'pure' | 'read' | 'write'; maximumAttempts: number;
   credentialBindings: string[]; networkMode: 'none' | 'configured';
 }
-const validator = new Ajv2020({ strict: true, allErrors: true });
+// Each schema document owns its Ajv reference registry. Cache by a serialized
+// snapshot, not $id or caller object identity, and bound retained compiler state.
+const compiledSchemas = new Map<string, ReturnType<Ajv2020['compile']>>();
+function compileSchema(schema: JsonSchema): ReturnType<Ajv2020['compile']> {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) throw new TypeError('Schema must be a JSON Schema object');
+  assertJsonValue(schema, 262_144);
+  const serialized = JSON.stringify(schema);
+  const cached = compiledSchemas.get(serialized);
+  if (cached) return cached;
+  const validator = new Ajv2020({ strict: true, allErrors: true });
+  const compiled = validator.compile(JSON.parse(serialized));
+  if ('$async' in compiled && compiled.$async) throw new TypeError('Async validator schemas are not supported');
+  if (compiledSchemas.size >= 64) compiledSchemas.delete(compiledSchemas.keys().next().value!);
+  compiledSchemas.set(serialized, compiled);
+  return compiled;
+}
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') { for (const item of Object.values(value)) freeze(item); Object.freeze(value); }
   return value;
@@ -23,13 +38,10 @@ export function defineBlock(definition: Omit<BlockDefinition, 'maximumAttempts'>
   if (!['none', 'configured'].includes(block.networkMode)) throw new TypeError('Invalid networkMode');
   if (!Array.isArray(block.credentialBindings) || block.credentialBindings.some(name => typeof name !== 'string' || !name) || new Set(block.credentialBindings).size !== block.credentialBindings.length) throw new TypeError('Invalid credential bindings');
   for (const schema of [block.inputSchema, block.outputSchema]) {
-    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) throw new TypeError('Schema must be a JSON Schema object');
-    const compiled = validator.compile(schema); // Checks 2020-12 and unresolved references.
-    if ('$async' in compiled && compiled.$async) throw new TypeError('Async validator schemas are not supported');
+    compileSchema(schema); // Checks 2020-12 and document-local references.
   }
   return freeze(JSON.parse(JSON.stringify(block)) as BlockDefinition);
 }
 export function validateBlockValue(schema: JsonSchema, value: JsonValue): void {
-  const compiled = validator.compile(schema);
-  if (('$async' in compiled && compiled.$async) || !compiled(value)) throw new TypeError('Value does not match block schema');
+  if (!compileSchema(schema)(value)) throw new TypeError('Value does not match block schema');
 }

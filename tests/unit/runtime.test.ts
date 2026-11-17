@@ -4,6 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DeploymentRegistry, taskQueueFor } from '../../packages/runtime/src/versioning.js';
+import { defineBlock } from '../../packages/sdk/src/block.js';
 import { ReconciliationAudit } from '../../packages/runtime/src/audit.js';
 const deployment = { deploymentId: 'test/v1', version: '1', workflowTypes: ['sample'], workflowBundle: { code: 'exports.sample = async () => 1' }, dependencyHash: 'a'.repeat(64), blocks: [], modules: [] };
 test('immutable deployments persist across instances, pin bundle/dependencies and reject changed IDs', async () => {
@@ -35,5 +36,18 @@ test('audit durably round-trips unknown outcomes and rejects storage failures', 
     assert.deepEqual(JSON.parse(await readFile(join(path, 'audit', files[0]!), 'utf8')).record, record);
     await writeFile(join(path, 'blocked'), 'file');
     await assert.rejects(new ReconciliationAudit(join(path, 'blocked')).acknowledge([record]));
+  } finally { await rm(path, { recursive: true, force: true }); }
+});
+
+test('deployment storage revalidates ID-bearing schemas after registration and reload', async () => {
+  const path = await mkdtemp(join(tmpdir(), 'runsett-schema-registry-'));
+  try {
+    const blocks = ['number', 'string'].map(type => defineBlock({ name: type, version: '1', moduleId: 'operation', moduleHash: 'c'.repeat(64), inputSchema: { $id: 'urn:runsett:deployment', type }, outputSchema: { $id: 'urn:runsett:deployment', type }, effect: 'pure', credentialBindings: [], networkMode: 'none' }));
+    const definition = { ...deployment, blocks, modules: [{ moduleId: 'operation', moduleHash: 'c'.repeat(64), path: '/opt/runsett/modules/operation.mjs', image: `sha256:${'d'.repeat(64)}` }] };
+    const registry = new DeploymentRegistry(path);
+    const registered = await registry.register(definition);
+    assert.deepEqual(await registry.read(deployment.deploymentId), registered);
+    assert.deepEqual(await registry.register(JSON.parse(JSON.stringify(definition))), registered);
+    assert.equal((await new DeploymentRegistry(path).list())[0]!.blocks.length, 2);
   } finally { await rm(path, { recursive: true, force: true }); }
 });
