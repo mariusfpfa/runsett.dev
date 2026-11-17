@@ -43,5 +43,21 @@ services:
       interval: 3s
       timeout: 5s
       retries: 60
+  temporal-ui:
+    image: temporalio/ui:2.38.0@sha256:52614848c8c9c3bc5049a1d374170955b0d339b386d059befa49d80649f25138
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://127.0.0.1:8080
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+    ports:
+      - "127.0.0.1:8080:8080"
 volumes:
   postgres-data:

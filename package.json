@@ -13,12 +13,14 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -p packages/contracts/tsconfig.json && tsc -p packages/runner/tsconfig.json && tsc -p packages/sdk/tsconfig.json && tsc -p packages/runtime/tsconfig.json",
+    "build": "tsc -p packages/contracts/tsconfig.json && tsc -p packages/runner/tsconfig.json && tsc -p packages/sdk/tsconfig.json && tsc -p packages/runtime/tsconfig.json && tsc -p packages/cli/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit",
     "test:unit": "node scripts/test-unit.mjs",
     "test:runner": "npm run build && node --import tsx --test tests/unit/runner.test.ts tests/integration/runner-container.test.ts",
-    "test:temporal": "npm run build && node --import tsx --test tests/integration/temporal.test.ts"
+    "test:temporal": "npm run build && node --import tsx --test tests/integration/temporal.test.ts",
+    "test:cli": "npm run build && node --import tsx --test tests/integration/cli.test.ts",
+    "example:register": "node --import tsx examples/javascript/register.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

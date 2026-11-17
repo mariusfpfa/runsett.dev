@@ -5,31 +5,40 @@ The approved [design](docs/superpowers/specs/2026-11-17-workflow-engine-design.m
 and [milestone plan](docs/superpowers/plans/2026-11-17-durable-javascript-milestone.md)
 describe the intended Temporal-backed execution architecture.
 
-## Local development
+## Run locally
 
-Use Node.js 24 and npm 11 (verified with Node 24.22.1 and npm 11.9.0).
-All `@runsett/*` workspace packages are private.
+Use Node.js 24, npm 11 and Docker Compose. All `@runsett/*` workspace packages
+are private. No vendor account is required.
 
 ```sh
-npm ci
+npm ci --cache /tmp/runsett-npm-cache
 npm run build
-npm run typecheck
-npm run test:unit
-npm run test:unit -- contracts
+docker compose -f deploy/compose.yaml up -d --wait
+npm run example:register
+npm exec -- runsett --help
 ```
 
-The initial contracts package exports JSON, invocation/result/error validation,
-and configurable execution limits. Its built ESM entry points are
-`@runsett/contracts`, `@runsett/contracts/json`, `@runsett/contracts/execution`,
-`@runsett/contracts/errors`, and `@runsett/contracts/limits`. They have no Node
-runtime imports and can be imported by deterministic workflow code. Validation
-throws actionable `TypeError` or `RangeError` instances; execution failures use
-the serializable `ExecutionErrorData` representation and `ExecutionError` class.
+Follow [Getting started](docs/getting-started.md) to start a worker, submit a
+fixture, inspect recorded results, cancel a run, and create/pause a fixture
+schedule. Temporal's local operator UI is at <http://127.0.0.1:8080>.
 
-Pinned development dependencies: TypeScript 5.9.3, tsx 4.23.15, and
-`@types/node` 24.19.2. `package-lock.json` pins their transitive dependencies.
-The remaining workspace manifests reserve the SDK, runner, runtime, and CLI
-packages for later milestone tasks.
+Authoring guides: [JavaScript Code](docs/javascript-code-node.md) and
+[Custom blocks](docs/custom-blocks.md). Low-level APIs and operational boundaries
+are in the [runtime README](packages/runtime/README.md) and
+[runner README](packages/runner/README.md).
+
+```sh
+npm run typecheck
+npm test
+npm run test:cli
+npm run test:temporal
+npm run test:runner
+```
+
+Integration tests require real running Temporal and Docker and fail if missing.
+This first milestone implements the durable JavaScript vertical slice;
+connectors, webhooks, shared artifact hosting and a custom graphical debugger
+remain future work.
 
 ## License
 

@@ -4,5 +4,15 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=24 <25" }
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "bin": {
+    "runsett": "bin/runsett.mjs"
+  },
+  "dependencies": {
+    "@runsett/contracts": "0.1.0",
+    "@runsett/runtime": "0.1.0",
+    "@temporalio/client": "1.26.0"
+  }
 }
