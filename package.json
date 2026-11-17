@@ -4,14 +4,20 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=24 <25", "npm": ">=11 <12" },
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
+  },
   "packageManager": "npm@11.9.0",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "build": "tsc -p packages/contracts/tsconfig.json",
+    "build": "tsc -p packages/contracts/tsconfig.json && tsc -p packages/runner/tsconfig.json",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit",
-    "test:unit": "node scripts/test-unit.mjs"
+    "test:unit": "node scripts/test-unit.mjs",
+    "test:runner": "npm run build && node --import tsx --test tests/unit/runner.test.ts tests/integration/runner-container.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

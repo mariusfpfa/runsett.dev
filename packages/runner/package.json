@@ -4,5 +4,17 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=24 <25" }
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "is-number": "7.0.0",
+    "@runsett/contracts": "0.1.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  }
 }
