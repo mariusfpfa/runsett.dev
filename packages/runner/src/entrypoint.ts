@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process';
-import { BoundedChannel, diagnosticFrame, FRAME_BYTES, MAX_ENVELOPE_BYTES } from './protocol.js';
+import { BoundedChannel, diagnosticFrame, FRAME_BYTES, MAX_ENVELOPE_BYTES, RUNNER_READY } from './protocol.js';
 
 // This PID1 remains independent of the host supervisor and never imports user
 // modules. Exiting PID1 causes Docker to terminate every namespace descendant.
 const [deadline, grace, resultLimit, diagnosticLimit] = process.argv.slice(2).map(Number) as [number, number, number, number];
+process.stdout.write(RUNNER_READY);
 const child = spawn(process.execPath, ['/opt/runsett/runner/executor.js'], { stdio: ['pipe', 'pipe', 'pipe', 'pipe'], env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOSTNAME: process.env.HOSTNAME ?? 'runsett' } });
 let stopping = false;
 let finished = false;

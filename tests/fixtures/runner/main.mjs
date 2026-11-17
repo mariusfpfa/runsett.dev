@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 export default async function(input, context) {
   switch (input.mode) {
     case 'transform': await new Promise(r => setTimeout(r, 20)); console.log('ordinary {"ok":true}'); return { value: input.value * 2, dependency: isNumber(input.value), operationKey: context.operationKey, attempt: context.attempt };
+    case 'boundary-error': { const error = new Error('m'.repeat(4080) + context.credentials.service); error.stack = 's'.repeat(1980) + context.credentials.service; throw error; }
     case 'throw': console.error(context.credentials.service); throw new Error(`failure ${context.credentials.service}`);
     case 'undefined': return undefined;
     case 'bigint': return 1n;

@@ -46,3 +46,27 @@ test('credential redaction preserves JSON syntax for escaped secrets', async () 
   const secret = 'secret"\nvalue';
   assert.deepEqual(redactJson({ nested: [secret], [secret]: 'text' }, [secret]), { nested: ['[REDACTED]'], '[REDACTED]': 'text' });
 });
+
+test('cancellation during stalled startup settles before reconciliation is released', async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const execute = createCodeExecutor({ registry: new ModuleRegistry([{ ...entry, path: '/opt/runsett/modules/main.mjs' }]), onReconciliation: () => blocked });
+  const controller = new AbortController();
+  const pending = execute({ identity: { workflowId: 'w', runId: 'r', stepId: 's', attempt: 1, operationKey: 'o', deploymentId: 'd' }, moduleId: 'transform', moduleHash: entry.moduleHash, input: null, credentialBindings: [], networkMode: 'none', limits: DEFAULT_EXECUTION_LIMITS }, controller.signal).catch(error => error);
+  controller.abort();
+  try {
+    const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('still pending'), 200))]);
+    assert.equal((result as any).code, 'CANCELLED');
+  } finally { release(); execute.close(); await pending; }
+});
+
+test('one absolute deadline bounds stalled startup reconciliation', async () => {
+  let release!: () => void;
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  const execute = createCodeExecutor({ registry: new ModuleRegistry([{ ...entry, path: '/opt/runsett/modules/main.mjs' }]), onReconciliation: () => blocked });
+  const pending = execute({ identity: { workflowId: 'w', runId: 'r', stepId: 's', attempt: 1, operationKey: 'o', deploymentId: 'd' }, moduleId: 'transform', moduleHash: entry.moduleHash, input: null, credentialBindings: [], networkMode: 'none', limits: { ...DEFAULT_EXECUTION_LIMITS, wallClockMs: 50 } }).catch(error => error);
+  try {
+    const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('still pending'), 200))]);
+    assert.equal((result as any).code, 'TIMEOUT');
+  } finally { release(); execute.close(); await pending; }
+});

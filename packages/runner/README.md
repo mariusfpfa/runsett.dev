@@ -24,7 +24,8 @@ Only selected credential binding values are sent through ephemeral stdin, never
 Docker environment, arguments, labels or files. The module context contains
 `operationKey`, `attempt`, `signal`, `log(...values)` and `credentials`. The child
 receives only PATH and HOSTNAME environment variables. Known credential literal
-values are redacted from diagnostic messages, errors and returned JSON strings
+values are redacted before child error truncation, and again by the supervisor,
+from diagnostic messages, errors and returned JSON strings
 and keys. Redaction is best effort for trusted authors; intentionally encoded
 or transformed secrets are outside that guarantee.
 
@@ -33,6 +34,10 @@ gets a non-root, read-only, capability-free container, 16 MiB writable `/tmp`,
 no Docker socket, no swap beyond its memory allocation, and disabled Docker log
 storage. Networking is `none` unless both invocation and deployment explicitly
 select a configured Docker network. Host/container network sharing is rejected.
+Cancellation and one absolute deadline cover reconciliation, creation and start.
+A PID1 readiness handshake gates delivery of the invocation input, so cancellation
+during setup cannot leave input queued for a late Docker start. A known container
+name and original expiry allow late create completion to be cleaned up.
 The executor's fd3 is reserved for results; ordinary stdout/stderr travel through
 a separate bounded diagnostic stream. Both are bounded before whole-message
 parsing. The PID1 watchdog is independent of the supervisor: the absolute
@@ -40,11 +45,15 @@ wall-clock deadline includes container creation/startup, and timeout/cancellatio
 allow at most the configured grace before exiting PID1 and killing descendants.
 
 Startup and periodic reconciliation report surviving invocations as `unknown`,
-and expired/exited invocations as `terminated-unknown` before cleanup. Use the
-`onReconciliation` hook to persist these records in the surrounding runtime;
-`reconcile()` also returns them directly. An unknown outcome never establishes
-that no external effect occurred. A live supervisor excludes its own active
-containers from orphan cleanup; a replacement receives a new owner identity.
+and expired/exited invocations as `terminated-unknown`. The `onReconciliation`
+hook must resolve only after durable persistence; cleanup occurs after that
+acknowledgement. A rejected hook retains Docker identity/outcome labels for retry.
+Without the hook, `reconcile()` performs discovery only and returns the records.
+The lower-level `reconcileContainers` likewise requires an explicit
+`acknowledge` callback before removing evidence. An unknown outcome never
+establishes that no external effect occurred. A live supervisor excludes only
+its active container names/IDs; inactive owned containers remain eligible for
+periodic cleanup retries after transient removal failures.
 The independent watchdog bounds a running orphan even while all supervisors are
 down. Stopped container metadata is removed when a supervisor returns. Docker
 or host failure can delay cleanup and outcome reporting; this runner cannot

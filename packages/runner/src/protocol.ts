@@ -46,3 +46,5 @@ export class DiagnosticDecoder {
   }
   finish(): void { if (this.pending.length) throw new TypeError('Truncated diagnostic frame'); }
 }
+
+export const RUNNER_READY = Buffer.from('RUNSETT_READY_V1\n');
