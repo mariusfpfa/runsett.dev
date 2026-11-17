@@ -21,11 +21,12 @@ jobs:
       # One job, serial suites: real Docker and Temporal/Postgres, no absent-service skips.
       - run: |
           mkdir -p artifacts
+          # GitHub workflow env keys are case-insensitive; export both forms here.
+          export no_proxy="$NO_PROXY"
           npm run test:integration 2>&1 | tee artifacts/integration.log
         shell: bash
         env:
           NO_PROXY: localhost,127.0.0.1,::1
-          no_proxy: localhost,127.0.0.1,::1
           RUNSETT_EVIDENCE_DIR: artifacts/recovery
       - if: always()
         run: |
