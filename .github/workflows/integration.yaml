@@ -22,6 +22,7 @@ jobs:
       - run: |
           mkdir -p artifacts
           npm run test:integration 2>&1 | tee artifacts/integration.log
+        shell: bash
         env:
           NO_PROXY: localhost,127.0.0.1,::1
           no_proxy: localhost,127.0.0.1,::1
