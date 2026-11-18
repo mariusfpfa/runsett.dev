@@ -7,11 +7,38 @@ explicit steps, author JavaScript blocks yourself or with any AI coding agent,
 and inspect what happened through a structured CLI and Temporal's operator UI.
 The runtime runs on your own infrastructure without a vendor account.
 
-The first milestone is implemented: durable JavaScript execution, schedules,
+Runsett Studio is the local browser editor. Create a workflow, add and configure
+steps on the canvas, and select **Run workflow** to see the execution and output.
+Studio includes text formatting, message templates, JSON field selection,
+durable waits, and JavaScript. The **Welcome message** workflow is ready to try.
+
+Choose **Add step → JavaScript** to open the code editor. Write an exported
+default function that receives the previous step’s value as `input`. Enter a
+Text or JSON sample, or click **Use previous step output** for the latest
+available value. **Source run** lists this workflow’s 50 most recent runs.
+Pick a run, choose **Source step**, and click **Load selected output** to use
+that execution’s trigger input, a step’s output, or the final result. The step
+list uses the names and order saved with that run. You can edit the imported
+sample before clicking **Test step**.
+
+Other steps have a **Test step** button in their inspector. **Test with input…**
+opens the same picker for the whole workflow. **Run workflow with this input**
+starts a new execution using the test value. The saved manual trigger keeps
+its configured input. JavaScript and built-in action tests use the workflow’s
+local Docker runner. Standalone wait tests wait for the configured duration.
+
+On macOS, double-click [Runsett Studio.command](<Runsett Studio.command>) in
+Finder. On Linux, start Docker and run `npm run dev` from the repository root.
+The launcher uses Node.js 24, installs missing dependencies, starts the included
+Compose services and runs the Studio worker. Open [Runsett Studio](http://localhost:4310).
+Workflow drafts and their run snapshots are stored in `.runsett/studio/`.
+Temporal records executions, including the workflow revision submitted with each run.
+
+The first engine milestone implements durable JavaScript execution, schedules,
 inspection, and recovery tests. This is an early foundation, with
 [production readiness work](docs/operations.md) still ahead. Built-in CSV,
-database, HTTP, and Google Sheets connectors, webhook response delivery, and a
-custom graphical debugger are planned next.
+database, HTTP, and Google Sheets connectors and webhook response delivery are
+planned next.
 
 ## What works today
 
@@ -132,6 +159,7 @@ The [reliability report](docs/reliability.md) records observed recovery behavior
 | `@runsett/runner` | Container lifecycle and bounded JavaScript execution |
 | `@runsett/runtime` | Temporal workers, deployment identity, schedules, and inspection |
 | `@runsett/cli` | Run submission, inspection, cancellation, and schedule commands |
+| `@runsett/studio` | Local visual workflow editor, worker, and run history |
 
 ## Documentation
 

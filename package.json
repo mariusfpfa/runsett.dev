@@ -13,8 +13,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc -p packages/contracts/tsconfig.json && tsc -p packages/runner/tsconfig.json && tsc -p packages/sdk/tsconfig.json && tsc -p packages/runtime/tsconfig.json && tsc -p packages/cli/tsconfig.json",
-    "typecheck": "tsc --noEmit",
+    "dev": "sh scripts/dev.sh",
+    "build": "tsc -p packages/contracts/tsconfig.json && tsc -p packages/runner/tsconfig.json && tsc -p packages/sdk/tsconfig.json && tsc -p packages/runtime/tsconfig.json && tsc -p packages/cli/tsconfig.json && npm run build:studio",
+    "build:studio": "tsc -p packages/studio/tsconfig.json && node packages/studio/build-web.mjs",
+    "typecheck": "tsc --noEmit && tsc -p packages/studio/web/tsconfig.json",
     "test": "npm run test:unit",
     "test:unit": "node scripts/test-unit.mjs",
     "test:runner": "npm run build && node --import tsx --test tests/unit/runner.test.ts tests/integration/runner-container.test.ts",

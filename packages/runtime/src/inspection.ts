@@ -7,7 +7,12 @@ import { readRequestIdentity } from './request-identity.js';
 type Payloads = temporal.api.common.v1.IPayloads | null | undefined;
 type Failure = temporal.api.failure.v1.IFailure | null | undefined;
 type Event = temporal.api.history.v1.IHistoryEvent;
-export interface InspectionOptions { details?: boolean; logs?: boolean; maxEvents?: number; maxLogBytes?: number }
+export interface InspectionOptions {
+  details?: boolean; logs?: boolean; maxEvents?: number; maxLogBytes?: number;
+  runId?: string;
+  /** Reserve the detail budget for one step, or use null for the final workflow output. */
+  outputStepId?: string | null;
+}
 export interface InspectionStep {
   stepId: string; scheduledEventId: string; inputRef: string; moduleHash?: string; state: string;
   observedAttempts: number[]; attemptHistory: 'incomplete'; outputRef?: string; output?: unknown; input?: unknown;
@@ -22,7 +27,7 @@ export async function inspectRun(options: { client: Client; deployments: Deploym
   const maxEvents = settings.maxEvents ?? 200; const maxLogBytes = settings.maxLogBytes ?? 65_536;
   if (!Number.isSafeInteger(maxEvents) || maxEvents < 1 || maxEvents > 1000) throw new TypeError('maxEvents must be between 1 and 1000');
   if (!Number.isSafeInteger(maxLogBytes) || maxLogBytes < 1 || maxLogBytes > 262_144) throw new TypeError('maxLogBytes must be between 1 and 262144');
-  const description = await options.client.workflow.getHandle(workflowId).describe();
+  const description = await options.client.workflow.getHandle(workflowId, settings.runId).describe();
   const rawMemo = description.memo?.runsettRequest as { deploymentId?: unknown } | undefined;
   const memo = readRequestIdentity(rawMemo);
   let deployment: { deploymentId?: string; version?: string; fingerprint?: string; availability: string } = {
@@ -42,8 +47,8 @@ export async function inspectRun(options: { client: Client; deployments: Deploym
   let historyAvailability = 'available'; let truncated = false; let nextPageToken: Uint8Array = new Uint8Array();
   let output: unknown; let outputRef: string | undefined; let error: { code: string; message?: string } | undefined; let inputRef: string | undefined; let input: unknown;
   let intendedAt: string | undefined;
-  function detail(value: unknown) {
-    if (!settings.details || value === undefined) return undefined;
+  function detail(value: unknown, outputStepId?: string | null) {
+    if (!settings.details || value === undefined || (settings.outputStepId !== undefined && settings.outputStepId !== outputStepId)) return undefined;
     const bytes = Buffer.byteLength(JSON.stringify(value));
     if (detailBytes + bytes > 2_097_152) { detailsTruncated = true; return undefined; }
     detailBytes += bytes; return value;
@@ -88,7 +93,7 @@ export async function inspectRun(options: { client: Client; deployments: Deploym
     const completed = event.activityTaskCompletedEventAttributes;
     if (completed) {
       const step = steps.get(id(completed.scheduledEventId));
-      if (step) { const result = decode(completed.result); step.state = 'COMPLETED'; step.outputRef = `history:${eventId}:result`; const value = detail(result?.output); if (value !== undefined) step.output = value; const diagnostics = logs(result?.diagnostics); if (diagnostics) step.diagnostics = diagnostics; }
+      if (step) { const result = decode(completed.result); step.state = 'COMPLETED'; step.outputRef = `history:${eventId}:result`; const value = detail(result?.output, step.stepId); if (value !== undefined) step.output = value; const diagnostics = logs(result?.diagnostics); if (diagnostics) step.diagnostics = diagnostics; }
     }
     const failed = event.activityTaskFailedEventAttributes ?? event.activityTaskTimedOutEventAttributes;
     if (failed) { const step = steps.get(id(failed.scheduledEventId)); if (step) { step.state = event.activityTaskTimedOutEventAttributes ? 'TIMED_OUT' : 'FAILED'; Object.assign(step, failure(failed.failure)); } }
@@ -97,7 +102,7 @@ export async function inspectRun(options: { client: Client; deployments: Deploym
     if (event.timerStartedEventAttributes) timers.set(event.timerStartedEventAttributes.timerId ?? '', timestamp(event.eventTime));
     const endedTimer = event.timerFiredEventAttributes ?? event.timerCanceledEventAttributes;
     if (endedTimer) timers.delete(endedTimer.timerId ?? '');
-    if (event.workflowExecutionCompletedEventAttributes) { outputRef = `history:${eventId}:result`; output = detail(decode(event.workflowExecutionCompletedEventAttributes.result)); }
+    if (event.workflowExecutionCompletedEventAttributes) { outputRef = `history:${eventId}:result`; output = detail(decode(event.workflowExecutionCompletedEventAttributes.result), null); }
     if (event.workflowExecutionFailedEventAttributes) error = failure(event.workflowExecutionFailedEventAttributes.failure, false).error;
   }
   try {
