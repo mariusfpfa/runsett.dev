@@ -9,7 +9,6 @@ import {
 import { api, message } from './workspace.js';
 
 type SourceStep = Pick<VisualStep, 'id' | 'name'>;
-const trigger = { id: 'trigger', name: 'Manual trigger' };
 const output = { id: 'output', name: 'Return result' };
 
 export function recordedOrigin(record: RecordedStepOutput) {
@@ -73,7 +72,7 @@ export function useRecordedInput(workflowId: string, apply: (record: RecordedSte
 const runDate = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 function runLabel(run: RecordedRunOption) {
   const state = run.state.toLowerCase().replaceAll('_', ' ');
-  return `${runDate.format(new Date(run.startedAt))} · ${state} · r${run.revision} · ${run.runId.slice(-8)}`;
+  return `${runDate.format(new Date(run.startedAt))} · ${run.triggerName ?? 'Manual trigger'} · ${state} · r${run.revision} · ${run.runId.slice(-8)}`;
 }
 
 type PickerProps = {
@@ -122,6 +121,7 @@ export function RecordedInputPicker({
   const run = runs?.find((entry) => entry.runId === runId);
   const historicSteps = run ? run.steps : steps;
   const previousId = previousSourceId(historicSteps, targetId, steps);
+  const trigger = { id: 'trigger', name: run ? (run.triggerName ?? 'Manual trigger') : 'Trigger input' };
   const sources = [trigger, ...historicSteps, output];
   const source = sources.find((entry) => entry.id === (stepId || previousId));
   const unavailable = !!runId && !run;

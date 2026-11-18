@@ -9,6 +9,7 @@ import {
   uuid,
   validateDocument,
   validateForRun,
+  type AutomaticTrigger,
   type RunInput,
   type SavedWorkflow,
   type WorkflowDocument,
@@ -74,6 +75,7 @@ export class StudioStore {
     requestId: string,
     deploymentId: string,
     testInput?: JsonValue,
+    trigger?: AutomaticTrigger,
   ): Submission {
     if (!uuid(requestId) || !Number.isSafeInteger(revision)) throw new RequestError('Invalid run request.');
     if (testInput !== undefined) assertTestInput(testInput);
@@ -85,6 +87,8 @@ export class StudioStore {
         submission = JSON.parse(String(row.body));
         if (submission.workflowId !== id || submission.revision !== revision)
           throw new RequestError('This run already belongs to a different revision.', 409);
+        if (submission.input.trigger !== trigger)
+          throw new RequestError('This run request already belongs to a different trigger.', 409);
         if (
           Boolean(submission.usesTestInput) !== (testInput !== undefined) ||
           (testInput !== undefined &&
@@ -96,7 +100,13 @@ export class StudioStore {
         if (workflow.revision !== revision)
           throw new RequestError('Save your latest changes before running this workflow.', 409);
         const value = validateForRun(workflow.document, testInput);
-        const input = { name: workflow.document.name, revision, value, steps: workflow.document.steps };
+        const input = {
+          name: workflow.document.name,
+          revision,
+          value,
+          steps: workflow.document.steps,
+          ...(trigger ? { trigger } : {}),
+        };
         submission = {
           id: 'studio-' + id + '-' + requestId,
           workflowId: id,

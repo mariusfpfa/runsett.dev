@@ -10,12 +10,89 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { VisualStep, WorkflowDocument } from '../src/model.js';
-import { formatLabels, IconButton, Tile, kinds, type NodeKind } from './ui.js';
+import { kindSettings, type VisualStep, type WorkflowDocument } from '../src/model.js';
+import { isConnectorKind, parseConnectorSetting } from '../src/connector-settings.js';
+import { HttpFields, MessagingFields, type ConnectionControls } from './ConnectorFields.js';
+import { DataFields } from './DataFields.js';
+import { enabledTriggers, OptionalTrigger, type TriggerControls } from './Triggers.js';
+import {
+  formatLabels,
+  IconButton,
+  isTriggerKind,
+  Tile,
+  kinds,
+  settingObject,
+  triggerKinds,
+  type MarkInvalid,
+  type NodeKind,
+  type TriggerKind,
+} from './ui.js';
+import { message } from './workspace.js';
+
+function StepFields({
+  workflowId,
+  step,
+  connections,
+  change,
+  markInvalid,
+}: {
+  workflowId: string;
+  step: VisualStep;
+  connections: ConnectionControls;
+  change(setting: string): void;
+  markInvalid: MarkInvalid;
+}) {
+  const { kind, setting } = step;
+  try {
+    if (isConnectorKind(kind)) {
+      if (kind === 'http')
+        return (
+          <HttpFields
+            settings={parseConnectorSetting(kind, setting, true)}
+            connections={connections}
+            change={change}
+            markInvalid={markInvalid}
+          />
+        );
+      return (
+        <MessagingFields
+          signInKey={'runsett.signin.' + workflowId + '.' + step.id}
+          kind={kind}
+          settings={parseConnectorSetting(kind, setting, true)}
+          connections={connections}
+          change={change}
+          markInvalid={markInvalid}
+        />
+      );
+    }
+    if (kind === 'set-field' || kind === 'filter-list' || kind === 'choose') {
+      const settings = settingObject(setting);
+      if (!settings) throw new Error('The settings for this step could not be read.');
+      return <DataFields kind={kind} settings={settings} change={change} markInvalid={markInvalid} />;
+    }
+    return null;
+  } catch (error) {
+    return (
+      <div className="setting-error" role="alert">
+        {message(error)}
+        <button className="text-action" onClick={() => change(kindSettings[kind].initial)}>
+          Reset step settings
+        </button>
+      </div>
+    );
+  }
+}
 
 type Props = {
+  workflowId: string;
   doc: WorkflowDocument;
   selection: string;
+  triggerKind: TriggerKind;
+  triggers: TriggerControls;
+  connections: ConnectionControls;
+  invalidDraft: boolean;
+  markInvalid: MarkInvalid;
+  configureTrigger(kind: TriggerKind): void;
   edit(doc: WorkflowDocument): void;
   select(id: string): void;
   move(id: string, index: number): void;
@@ -23,12 +100,33 @@ type Props = {
   test(id: string): void;
   close(): void;
 };
-export function Inspector({ doc, selection, edit, select, move, remove, test, close }: Props) {
+export function Inspector({
+  workflowId,
+  doc,
+  selection,
+  triggerKind,
+  triggers,
+  connections,
+  invalidDraft,
+  markInvalid,
+  configureTrigger,
+  edit,
+  select,
+  move,
+  remove,
+  test,
+  close,
+}: Props) {
   const index = doc.steps.findIndex((s) => s.id === selection),
     step = doc.steps[index];
-  const kind: NodeKind = step?.kind ?? (selection === 'output' ? 'output' : 'trigger');
+  const kind: NodeKind = step?.kind ?? (selection === 'output' ? 'output' : triggerKind);
+  const activeTriggers = enabledTriggers(triggers.data);
   const nodes = [
-    { id: 'trigger', name: 'Manual trigger', kind: 'trigger' as NodeKind },
+    {
+      id: 'trigger',
+      name: activeTriggers.length === 1 ? 'Manual trigger' : 'Workflow triggers',
+      kind: 'trigger' as NodeKind,
+    },
     ...doc.steps,
     { id: 'output', kind: 'output' as NodeKind, name: 'Return result' },
   ];
@@ -61,6 +159,22 @@ export function Inspector({ doc, selection, edit, select, move, remove, test, cl
           </div>
         </div>
         <p className="inspector-hint">{kinds[kind].hint}</p>
+        {isTriggerKind(kind) && (
+          <div className="trigger-tabs" role="group" aria-label="Workflow triggers">
+            {triggerKinds.map((item) => (
+              <button
+                key={item}
+                type="button"
+                aria-pressed={item === kind}
+                aria-label={'Configure ' + kinds[item].name}
+                onClick={() => configureTrigger(item)}
+              >
+                <i className={activeTriggers.includes(item) ? 'enabled' : ''} />
+                {item === 'trigger' ? 'Manual' : kinds[item].name}
+              </button>
+            ))}
+          </div>
+        )}
         <section className="inspector-section">
           <h3>Configuration</h3>
           {step && (
@@ -68,6 +182,16 @@ export function Inspector({ doc, selection, edit, select, move, remove, test, cl
               Step name
               <input maxLength={100} value={step.name} onChange={(e) => change({ name: e.target.value })} />
             </label>
+          )}
+          {step && (
+            <StepFields
+              workflowId={workflowId}
+              key={step.id}
+              step={step}
+              connections={connections}
+              change={(setting) => change({ setting })}
+              markInvalid={markInvalid}
+            />
           )}
           {kind === 'format' && step && (
             <label className="field">
@@ -170,13 +294,22 @@ export function Inspector({ doc, selection, edit, select, move, remove, test, cl
               </label>
             </>
           )}
+          {(kind === 'webhook' || kind === 'schedule') && (
+            <OptionalTrigger
+              key={kind}
+              kind={kind}
+              controls={triggers}
+              doc={doc}
+              editInput={() => configureTrigger('trigger')}
+            />
+          )}
           {kind === 'output' && (
             <p className="body-note">
               The final value appears in the run details. Select an earlier step to change how it is produced.
             </p>
           )}
           {step && step.kind !== 'javascript' && (
-            <button className="btn btn-light" onClick={() => test(step.id)}>
+            <button className="btn btn-light" disabled={invalidDraft} onClick={() => test(step.id)}>
               <Play size={14} />
               Test step
             </button>

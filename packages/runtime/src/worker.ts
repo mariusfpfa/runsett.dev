@@ -1,11 +1,11 @@
 import { NativeConnection, Worker } from '@temporalio/worker';
-import { createCodeExecutor, ModuleRegistry } from '@runsett/runner';
+import { createCodeExecutor, ModuleRegistry, type CredentialSource } from '@runsett/runner';
 import { createActivities } from './activities.js';
 import { ReconciliationAudit } from './audit.js';
 import { assertRegisteredDeployment, taskQueueFor, type RegisteredDeployment } from './versioning.js';
 export async function createRunsettWorker(options: {
   deployment: RegisteredDeployment; auditDirectory: string; address?: string; namespace?: string;
-  credentials?: Readonly<Record<string, string>>;
+  credentials?: Readonly<Record<string, CredentialSource>>;
 }) {
   assertRegisteredDeployment(options.deployment);
   // Snapshot to prevent mutation by the embedding caller while the worker runs.

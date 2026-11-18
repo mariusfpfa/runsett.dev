@@ -5,9 +5,10 @@ import { containerRuntime, reconcileContainers, type ContainerRecord, type Conta
 import { BoundedChannel, DiagnosticDecoder, MAX_CREDENTIAL_BYTES, MAX_METADATA_BYTES, RUNNER_READY } from './protocol.js';
 import { DiagnosticCollector, redact, redactJson } from './diagnostics.js';
 import { InvocationLifetime, boundedCleanup } from './lifecycle.js';
+export type CredentialSource = string | ((signal: AbortSignal) => Promise<string>);
 export interface ExecutorOptions {
   registry: ModuleRegistry;
-  credentials?: Readonly<Record<string, string>>;
+  credentials?: Readonly<Record<string, CredentialSource>>;
   configuredNetwork?: string;
   scope?: string;
   reconciliationIntervalMs?: number;
@@ -36,6 +37,7 @@ export function createCodeExecutor(options: ExecutorOptions): CodeExecutor {
   timer.unref();
   const execute = async (invocation: CodeInvocation, signal?: AbortSignal): Promise<CodeResult> => {
     const selected: Record<string, string> = Object.create(null);
+    const deferred = new Map<string, (signal: AbortSignal) => Promise<string>>();
     let module;
     try {
       if (closed) throw new TypeError('Executor is closed');
@@ -47,7 +49,9 @@ export function createCodeExecutor(options: ExecutorOptions): CodeExecutor {
       if (invocation.networkMode === 'configured' && (!configuredNetwork || ['host', 'container'].some(value => configuredNetwork.startsWith(value)))) throw new TypeError('Outbound network not configured');
       for (const binding of invocation.credentialBindings) {
         if (!Object.hasOwn(credentials, binding) || !credentials[binding]) throw new TypeError('Unknown credential binding');
-        selected[binding] = credentials[binding]!;
+        const source = credentials[binding]!;
+        if (typeof source === 'function') deferred.set(binding, source);
+        else selected[binding] = source;
       }
       assertJsonValue(selected, MAX_CREDENTIAL_BYTES);
       assertJsonValue({ ...invocation, input: null, limits: invocation.limits }, MAX_METADATA_BYTES - 1024);
@@ -70,6 +74,25 @@ export function createCodeExecutor(options: ExecutorOptions): CodeExecutor {
     };
     lifetime.signal.addEventListener('abort', abort, { once: true });
     try {
+      // A queued step can run hours after the worker starts. Resolve its bound
+      // access tokens inside the invocation deadline, before starting a container.
+      for (const [binding, resolve] of deferred) {
+        lifetime.check();
+        let value: string;
+        try {
+          value = await lifetime.wait(resolve(lifetime.signal));
+        } catch {
+          lifetime.check();
+          throw failure('INFRASTRUCTURE_ERROR', 'Could not load the selected credential. Check the account connection and try again.');
+        }
+        if (typeof value !== 'string' || !value) throw failure('VALIDATION_ERROR', 'The selected credential is unavailable.');
+        selected[binding] = value;
+        secrets.push(value);
+      }
+      if (deferred.size) {
+        try { assertJsonValue(selected, MAX_CREDENTIAL_BYTES); }
+        catch { throw failure('VALIDATION_ERROR', 'Resolved credentials exceed the allowed size.'); }
+      }
       await lifetime.wait(startup);
       lifetime.check();
       active.add(name);

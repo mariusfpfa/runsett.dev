@@ -6,11 +6,22 @@ import {
   CaseSensitive,
   Clock3,
   FileCode2,
+  FileJson2,
+  GitFork,
+  Globe2,
+  Hash,
+  ListFilter,
   MessageSquareText,
   MousePointer2,
+  PencilLine,
+  Timer,
+  UsersRound,
+  Webhook,
   X,
 } from 'lucide-react';
-import type { StepKind, VisualStep } from '../src/model.js';
+import { kindSettings, type StepKind, type VisualStep } from '../src/model.js';
+import type { JsonValue } from '@runsett/contracts';
+import type { ConnectionSummary } from '../src/connector-settings.js';
 
 export const kinds = {
   trigger: {
@@ -18,6 +29,18 @@ export const kinds = {
     label: 'Trigger',
     name: 'Manual trigger',
     hint: 'Start with an input value.',
+  },
+  webhook: {
+    icon: Webhook,
+    label: 'Trigger',
+    name: 'Webhook',
+    hint: 'Start a run when a JSON request reaches Studio.',
+  },
+  schedule: {
+    icon: Timer,
+    label: 'Trigger',
+    name: 'Schedule',
+    hint: 'Run at a regular interval with the workflow’s saved input.',
   },
   format: {
     icon: CaseSensitive,
@@ -32,6 +55,48 @@ export const kinds = {
     hint: 'Combine text with the previous value.',
   },
   field: { icon: Braces, label: 'Transform', name: 'Read field', hint: 'Pick a value from JSON data.' },
+  'parse-json': {
+    icon: FileJson2,
+    label: 'Transform',
+    name: kindSettings['parse-json'].name,
+    hint: 'Turn JSON text into a value other steps can use.',
+  },
+  'set-field': {
+    icon: PencilLine,
+    label: 'Transform',
+    name: kindSettings['set-field'].name,
+    hint: 'Add or replace a field in a JSON object.',
+  },
+  'filter-list': {
+    icon: ListFilter,
+    label: 'Transform',
+    name: kindSettings['filter-list'].name,
+    hint: 'Keep list items that match a value.',
+  },
+  choose: {
+    icon: GitFork,
+    label: 'Logic',
+    name: kindSettings.choose.name,
+    hint: 'Return one of two values based on a condition.',
+  },
+  http: {
+    icon: Globe2,
+    label: 'Request',
+    name: kindSettings.http.name,
+    hint: 'Call an HTTP endpoint and receive its response.',
+  },
+  slack: {
+    icon: Hash,
+    label: 'Messaging',
+    name: kindSettings.slack.name,
+    hint: 'Send a message to a channel in your Slack workspace.',
+  },
+  teams: {
+    icon: UsersRound,
+    label: 'Messaging',
+    name: kindSettings.teams.name,
+    hint: 'Send a message to a channel in Microsoft Teams.',
+  },
   wait: { icon: Clock3, label: 'Timing', name: 'Wait', hint: 'Pause before continuing.' },
   javascript: {
     icon: FileCode2,
@@ -47,17 +112,75 @@ export const kinds = {
   },
 };
 export type NodeKind = keyof typeof kinds;
+export type MarkInvalid = (change: 1 | -1) => void;
+
+export function useInvalidDraft(invalid: boolean, markInvalid: MarkInvalid) {
+  useEffect(() => {
+    if (!invalid) return;
+    markInvalid(1);
+    return () => markInvalid(-1);
+  }, [invalid, markInvalid]);
+}
+
+export type TriggerKind = 'trigger' | 'webhook' | 'schedule';
+export const triggerKinds = ['trigger', 'webhook', 'schedule'] as const;
+export function isTriggerKind(kind: NodeKind): kind is TriggerKind {
+  return kind === 'trigger' || kind === 'webhook' || kind === 'schedule';
+}
+export const libraryGroups = [
+  { name: 'Apps & APIs', kinds: ['http', 'slack', 'teams'] },
+  { name: 'Data', kinds: ['format', 'compose', 'parse-json', 'field', 'set-field', 'filter-list'] },
+  { name: 'Logic & code', kinds: ['choose', 'wait', 'javascript'] },
+  { name: 'Triggers', kinds: triggerKinds },
+] as const satisfies readonly { name: string; kinds: readonly (StepKind | TriggerKind)[] }[];
 export const formatLabels: Record<string, string> = {
   title: 'Title case',
   upper: 'UPPERCASE',
   lower: 'lowercase',
   trim: 'Trim whitespace',
 };
-export function subtitle(step: VisualStep) {
+export function settingObject(setting: string): Record<string, JsonValue> | null {
+  try {
+    const parsed: unknown = JSON.parse(setting);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, JsonValue>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+export function subtitle(step: VisualStep, connections: ConnectionSummary[] = []) {
   if (step.kind === 'format') return formatLabels[step.setting] ?? 'Select a format';
   if (step.kind === 'javascript') return step.setting.trim() ? 'step.mjs' : 'Add your code';
   if (step.kind === 'wait') return step.setting + (step.setting === '1' ? ' second' : ' seconds');
-  return step.setting || (step.kind === 'field' ? 'Choose a field' : 'Empty message');
+  if (step.kind === 'field') return step.setting || 'Choose a field';
+  if (step.kind === 'compose') return step.setting || 'Empty message';
+  if (step.kind === 'parse-json') return 'JSON text → value';
+  const config = settingObject(step.setting);
+  if (!config) return 'Check step settings';
+  if (step.kind === 'http') {
+    try {
+      return String(config.method) + ' · ' + new URL(String(config.url)).host;
+    } catch {
+      return 'Set a request URL';
+    }
+  }
+  if (step.kind === 'slack' || step.kind === 'teams') {
+    const account = connections.find((item) => item.id === config.connectionId);
+    const channel = config.channelName || config.channelId;
+    if (typeof channel === 'string' && channel) {
+      if (step.kind === 'slack') return '#' + channel.replace(/^#/, '');
+      const team = config.teamName || config.teamId;
+      return team ? team + ' / ' + channel : channel;
+    }
+    if (account && 'auth' in account && account.auth === 'oauth') {
+      return step.kind === 'teams' && !config.teamId ? 'Choose a team' : 'Choose a channel';
+    }
+    return account?.name ?? (config.connectionId ? 'Saved connection' : 'Choose an account');
+  }
+  const path = typeof config.path === 'string' ? config.path : '';
+  if (step.kind === 'set-field') return path || 'Choose a field';
+  return path || (step.kind === 'filter-list' ? 'Compare each item' : 'Compare the input');
 }
 export function Tile({ kind, small = false }: { kind: NodeKind; small?: boolean }) {
   const Icon = kinds[kind].icon;
@@ -137,9 +260,6 @@ export function Modal({
     </dialog>
   );
 }
-export const actionKinds = Object.keys(kinds).filter(
-  (key) => key !== 'trigger' && key !== 'output',
-) as StepKind[];
 export function Status({ state }: { state: string }) {
   const label = state.toLowerCase().replaceAll('_', ' ');
   return (

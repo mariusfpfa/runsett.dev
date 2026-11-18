@@ -1,40 +1,108 @@
 import { useState } from 'react';
-import { ArrowRight, Check, FileText, Search, Workflow } from 'lucide-react';
+import { ArrowRight, Check, FileText, Search, SearchX, Workflow } from 'lucide-react';
 import { greeting, type StepKind, type WorkflowDocument } from '../src/model.js';
-import { actionKinds, kinds, Modal, Tile } from './ui.js';
+import { isTriggerKind, kinds, libraryGroups, Modal, Tile, type TriggerKind } from './ui.js';
 import { message } from './workspace.js';
 
-export function StepLibrary({ close, insert }: { close(): void; insert(kind: StepKind): void }) {
+export function StepLibrary({
+  close,
+  insert,
+  configureTrigger,
+  activeTriggers,
+  stepsFull,
+}: {
+  close(): void;
+  insert(kind: StepKind): void;
+  configureTrigger(kind: TriggerKind): void;
+  activeTriggers: TriggerKind[];
+  stepsFull: boolean;
+}) {
   const [search, setSearch] = useState('');
-  const visible = actionKinds.filter((kind) =>
-    (kinds[kind].name + ' ' + kinds[kind].hint).toLowerCase().includes(search.toLowerCase()),
-  );
+  const [category, setCategory] = useState('All');
+  const term = search.trim().toLowerCase();
+  const visible = libraryGroups
+    .filter((group) => category === 'All' || category === group.name)
+    .map((group) => ({
+      name: group.name,
+      entries: group.kinds.filter((kind) =>
+        [kinds[kind].name, kinds[kind].hint, kinds[kind].label, group.name]
+          .join(' ')
+          .toLowerCase()
+          .includes(term),
+      ),
+    }))
+    .filter((group) => group.entries.length > 0);
   return (
-    <Modal title="Add a step" close={close}>
-      <div className="dialog-body">
+    <Modal title="Step library" className="library-dialog" close={close}>
+      <div className="library-tools">
         <label className="search-box">
           <Search size={17} />
           <input
             autoFocus
             aria-label="Search steps"
-            placeholder="Search steps…"
+            placeholder="Search steps and triggers…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
-        <div className="block-list">
-          {visible.map((kind) => (
-            <button key={kind} onClick={() => insert(kind)}>
-              <Tile kind={kind} />
-              <span>
-                <strong>{kinds[kind].name}</strong>
-                <small>{kinds[kind].hint}</small>
-              </span>
-              <ArrowRight size={16} />
+        <div className="library-filters" role="group" aria-label="Library categories">
+          {['All', ...libraryGroups.map((group) => group.name)].map((name) => (
+            <button
+              key={name}
+              type="button"
+              aria-pressed={category === name}
+              onClick={() => setCategory(name)}
+            >
+              {name}
             </button>
           ))}
-          {!visible.length && <p className="empty-inline">No steps match “{search}”.</p>}
         </div>
+      </div>
+      <div className="library-results">
+        {visible.map((group) => (
+          <section className="library-group" key={group.name} aria-label={group.name}>
+            <h3>{group.name}</h3>
+            <div className="block-list">
+              {group.entries.map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  disabled={!isTriggerKind(kind) && stepsFull}
+                  onClick={() => (isTriggerKind(kind) ? configureTrigger(kind) : insert(kind))}
+                >
+                  <Tile kind={kind} small />
+                  <span>
+                    <strong>{kinds[kind].name}</strong>
+                    <small>{kinds[kind].hint}</small>
+                  </span>
+                  {isTriggerKind(kind) && activeTriggers.includes(kind) ? (
+                    <Check size={14} aria-label="Active" />
+                  ) : (
+                    <ArrowRight size={14} />
+                  )}
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+        {stepsFull && <p className="body-note">This workflow has reached its step limit.</p>}
+        {!visible.length && (
+          <div className="library-empty">
+            <SearchX size={22} />
+            <p>
+              No matches for “{search}” in {category === 'All' ? 'the library' : category}.
+            </p>
+            <button
+              className="btn btn-light"
+              onClick={() => {
+                setSearch('');
+                setCategory('All');
+              }}
+            >
+              Show all steps
+            </button>
+          </div>
+        )}
       </div>
     </Modal>
   );

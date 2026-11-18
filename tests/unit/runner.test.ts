@@ -65,6 +65,46 @@ test('credential redaction preserves JSON syntax for escaped secrets', async () 
   assert.deepEqual(redactJson({ nested: [secret], [secret]: 'text' }, [secret]), { nested: ['[REDACTED]'], '[REDACTED]': 'text' });
 });
 
+test('a worker resolves only the selected credentials for each invocation and redacts the refreshed values', async () => {
+  let issued = 0;
+  const execute = createCodeExecutor({
+    registry: new ModuleRegistry([{ ...entry, path: '/opt/runsett/modules/main.mjs' }]),
+    scope: 'unit-refresh-credentials',
+    credentials: {
+      account: async () => 'fixture-token-' + ++issued,
+      other: async () => { throw new Error('Unrelated account was accessed'); },
+    },
+    runtime: {
+      create: async () => 'synthetic-account',
+      remove: async () => {},
+      attach: () => spawn(process.execPath, ['-e', `
+        process.stdout.write('RUNSETT_READY_V1\\n');
+        let input = '';
+        process.stdin.on('data', chunk => { input += chunk; });
+        process.stdin.on('end', () => {
+          const { credentials } = JSON.parse(input);
+          process.stdout.write(JSON.stringify({ output: {
+            generation: Number(credentials.account.split('-').at(-1)),
+            secret: credentials.account,
+            bindings: Object.keys(credentials),
+          } }));
+        });
+      `], { stdio: ['pipe', 'pipe', 'pipe'] }),
+    },
+  });
+  const invocation = {
+    identity: { workflowId: 'w', runId: 'r', stepId: 's', attempt: 1, operationKey: 'o', deploymentId: 'd' },
+    moduleId: entry.moduleId, moduleHash: entry.moduleHash, input: null, credentialBindings: ['account'],
+    networkMode: 'none' as const, limits: DEFAULT_EXECUTION_LIMITS,
+  };
+  try {
+    for (const generation of [1, 2]) {
+      const result = await execute(invocation);
+      assert.deepEqual(result.output, { generation, secret: '[REDACTED]', bindings: ['account'] });
+    }
+  } finally { execute.close(); }
+});
+
 test('cancellation during stalled startup settles before reconciliation is released', async () => {
   let release!: () => void;
   const blocked = new Promise<void>(resolve => { release = resolve; });

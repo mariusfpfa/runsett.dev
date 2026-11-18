@@ -21,6 +21,7 @@ type RunRow = {
   startedAt: string;
   finishedAt?: string;
   revision?: number;
+  triggerName?: string;
 };
 type StepResult = {
   stepId: string;
@@ -38,6 +39,7 @@ type RunDetails = {
   state: string;
   name: string;
   revision?: number;
+  triggerName?: string;
   input?: unknown;
   output?: unknown;
   steps: StepResult[];
@@ -104,6 +106,7 @@ export function RunHistory({ workflow, open }: { workflow?: string | undefined; 
               <tr>
                 <th>Workflow</th>
                 <th>Status</th>
+                <th>Trigger</th>
                 <th>Started</th>
                 <th>Duration</th>
                 <th />
@@ -130,6 +133,7 @@ export function RunHistory({ workflow, open }: { workflow?: string | undefined; 
                   <td>
                     <Status state={row.state} />
                   </td>
+                  <td>{row.triggerName ?? '—'}</td>
                   <td>
                     {new Date(row.startedAt).toLocaleString(undefined, {
                       month: 'short',
@@ -208,7 +212,8 @@ export function ResultDialog({ id, namespace, close }: { id: string; namespace: 
               <div>
                 <h3>{run.name}</h3>
                 <small>
-                  {run.revision ? 'Revision ' + run.revision + ' · ' : ''}Run {run.runId.slice(-8)}
+                  {run.revision ? 'Revision ' + run.revision + ' · ' : ''}
+                  {run.triggerName ? run.triggerName + ' · ' : ''}Run {run.runId.slice(-8)}
                 </small>
               </div>
               <Status state={run.state} />

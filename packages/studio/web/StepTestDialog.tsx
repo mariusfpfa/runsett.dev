@@ -2,6 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Braces, Check, CircleAlert, FileCode2, LoaderCircle, Play, Square, Terminal } from 'lucide-react';
 import type { JsonValue } from '@runsett/contracts';
 import {
+  containsWebhookUrl,
+  isConnectorKind,
+  parseConnectorSetting,
+  type ConnectionSummary,
+} from '../src/connector-settings.js';
+import {
   assertTestInput,
   fixtureFromOutput,
   maxTestInputBytes,
@@ -43,6 +49,7 @@ type Props = {
   step: VisualStep | null;
   workflowId: string;
   document: WorkflowDocument;
+  connections: ConnectionSummary[];
   engine: Engine;
   saveState: string;
   saveError: string;
@@ -52,10 +59,31 @@ type Props = {
 };
 type LastTest = { source: string; fixture: Fixture; result: StepTestResult };
 
+function testTarget(step: VisualStep, connections: ConnectionSummary[]) {
+  const summary = subtitle(step, connections);
+  if (!isConnectorKind(step.kind)) return { summary, problem: '' };
+  try {
+    if (step.kind === 'http') {
+      const request = parseConnectorSetting('http', step.setting);
+      return { summary: request.method + ' ' + request.url, problem: '' };
+    }
+    const settings = parseConnectorSetting(step.kind, step.setting);
+    const account = connections.find((item) => item.id === settings.connectionId);
+    return {
+      summary:
+        account && 'auth' in account && account.auth === 'oauth' ? summary + ' · ' + account.name : summary,
+      problem: '',
+    };
+  } catch (error) {
+    return { summary, problem: message(error) };
+  }
+}
+
 export function StepTestDialog({
   step,
   workflowId,
   document: doc,
+  connections,
   engine,
   saveState,
   saveError,
@@ -65,6 +93,16 @@ export function StepTestDialog({
 }: Props) {
   const targetId = step?.id ?? 'trigger';
   const isCode = step?.kind === 'javascript';
+  const target = step ? testTarget(step, connections) : null;
+  const liveAction =
+    step?.kind === 'http'
+      ? 'Send live HTTP request'
+      : step?.kind === 'slack'
+        ? 'Send live Slack message'
+        : step?.kind === 'teams'
+          ? 'Send live Teams message'
+          : '';
+  const hasLiveSteps = doc.steps.some((item) => isConnectorKind(item.kind));
   const key = 'runsett.test-input.' + workflowId + '.' + targetId;
   const [fixture, setFixture] = useState(() => initialFixture(key, doc));
   const [last, setLast] = useState<LastTest | null>(null);
@@ -86,7 +124,10 @@ export function StepTestDialog({
     setFixture(next);
     setError('');
     try {
-      localStorage.setItem(key, JSON.stringify(next));
+      const serialized = JSON.stringify(next);
+      if (containsWebhookUrl(serialized) || serialized.includes(window.location.origin + '/hooks/'))
+        localStorage.removeItem(key);
+      else localStorage.setItem(key, serialized);
     } catch {
       /* Editing still works without storage. */
     }
@@ -97,6 +138,7 @@ export function StepTestDialog({
   }
   async function test() {
     if (active.current || loader.loading || engine.status !== 'online') return;
+    if (target?.problem) return;
     setError('');
     const source = step?.setting ?? '';
     let input: unknown = fixture.text;
@@ -157,7 +199,7 @@ export function StepTestDialog({
         isCode ? 'JavaScript editor' : step ? 'Test ' + (step.name || kinds[step.kind].name) : 'Test workflow'
       }
       close={() => {
-        if (step || !busy) close();
+        if (!busy || (step && !liveAction)) close();
       }}
       className={isCode ? 'js-dialog' : 'step-test-dialog'}
     >
@@ -190,10 +232,15 @@ export function StepTestDialog({
           <section className="js-testbench" aria-label={step ? 'Step test' : 'Workflow test'}>
             {step && !isCode && (
               <p className="step-test-setting">
-                {kinds[step.kind].name} · {subtitle(step)}
+                {kinds[step.kind].name} · {target?.summary}
               </p>
             )}
-            {!step && <p className="step-test-setting">This input applies to one new workflow run.</p>}
+            {!step && (
+              <p className="step-test-setting">
+                This input applies to one new workflow run.
+                {hasLiveSteps && ' Its configured requests and messages will be sent.'}
+              </p>
+            )}
             <RecordedInputPicker
               workflowId={workflowId}
               steps={doc.steps}
@@ -229,7 +276,7 @@ export function StepTestDialog({
               onChange={(e) => changeFixture({ ...fixture, text: e.target.value })}
             />
             <div className="js-test-action">
-              {busy && step ? (
+              {busy && step && !liveAction ? (
                 <button className="btn btn-light" onClick={stopTest}>
                   <Square size={13} />
                   Stop test
@@ -238,10 +285,10 @@ export function StepTestDialog({
                 <button
                   className="btn btn-primary"
                   onClick={() => void test()}
-                  disabled={engine.status !== 'online' || loader.loading || busy}
+                  disabled={engine.status !== 'online' || loader.loading || busy || !!target?.problem}
                 >
                   <Play size={14} />
-                  {step ? 'Test step' : 'Run workflow with this input'}
+                  {liveAction || (step ? 'Test step' : 'Run workflow with this input')}
                 </button>
               )}
               {busy && (
@@ -251,6 +298,11 @@ export function StepTestDialog({
                 </span>
               )}
             </div>
+            {target?.problem && (
+              <p className="js-note" role="status">
+                {target.problem} Edit this step in the inspector to test it.
+              </p>
+            )}
             {fixture.origin && (
               <p className="js-note js-input-origin" role="status">
                 {fixture.origin}
@@ -330,7 +382,7 @@ export function StepTestDialog({
               {saveError || (saveState === 'Saved' ? 'Code saved to workflow' : saveState)}
             </span>
           )}
-          <button className="btn btn-light" disabled={!step && busy} onClick={close}>
+          <button className="btn btn-light" disabled={(!step || !!liveAction) && busy} onClick={close}>
             Done
           </button>
         </div>

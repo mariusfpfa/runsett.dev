@@ -5,8 +5,17 @@ import {
   type DiagnosticRecord,
   type JsonValue,
 } from '@runsett/contracts';
+import { dataKinds, parseDataSetting } from '../modules/data-settings.mjs';
+import {
+  connectorDefaults,
+  isConnectorKind,
+  maxConnectorSettingBytes,
+  parseConnectorSetting,
+  type ConnectorKind,
+} from './connector-settings.js';
 
-export type StepKind = 'format' | 'compose' | 'field' | 'wait' | 'javascript';
+export type DataKind = (typeof dataKinds)[number];
+export type StepKind = 'format' | 'compose' | 'field' | 'wait' | 'javascript' | DataKind | ConnectorKind;
 export type VisualStep = { id: string; kind: StepKind; name: string; setting: string };
 export type WorkflowDocument = {
   name: string;
@@ -15,7 +24,17 @@ export type WorkflowDocument = {
   steps: VisualStep[];
 };
 export type SavedWorkflow = { id: string; revision: number; updatedAt: string; document: WorkflowDocument };
-export type RunInput = { name: string; revision: number; value: JsonValue; steps: VisualStep[] };
+export type AutomaticTrigger = 'schedule' | 'webhook';
+export type RunInput = {
+  name: string;
+  revision: number;
+  value: JsonValue;
+  steps: VisualStep[];
+  trigger?: AutomaticTrigger;
+};
+export function triggerName(trigger?: AutomaticTrigger) {
+  return trigger === 'schedule' ? 'Schedule' : trigger === 'webhook' ? 'Webhook' : 'Manual trigger';
+}
 export const maxSteps = 24;
 export const maxSourceBytes = 32 * 1024;
 export const maxTestInputBytes = DEFAULT_EXECUTION_LIMITS.inputBytes;
@@ -26,6 +45,7 @@ export type RecordedRunOption = RecordedRunRef & {
   startedAt: string;
   state: string;
   revision: number;
+  triggerName?: string;
   steps: Pick<VisualStep, 'id' | 'name'>[];
 };
 
@@ -60,6 +80,16 @@ export const kindSettings: Record<StepKind, { name: string; initial: string }> =
   compose: { name: 'Compose message', initial: 'Hello, {{value}}!' },
   field: { name: 'Read field', initial: 'name' },
   wait: { name: 'Wait', initial: '2' },
+  http: { name: 'HTTP request', initial: connectorDefaults.http },
+  slack: { name: 'Send Slack message', initial: connectorDefaults.slack },
+  teams: { name: 'Send Teams message', initial: connectorDefaults.teams },
+  'parse-json': { name: 'Parse JSON', initial: '' },
+  'set-field': { name: 'Set field', initial: JSON.stringify({ path: 'status', value: 'ready' }) },
+  'filter-list': { name: 'Filter list', initial: JSON.stringify({ path: 'active', equals: true }) },
+  choose: {
+    name: 'Choose value',
+    initial: JSON.stringify({ path: 'active', equals: true, then: 'active', else: 'inactive' }),
+  },
   javascript: {
     name: 'JavaScript',
     initial: [
@@ -97,6 +127,25 @@ export function uuid(value: unknown): value is string {
 }
 function boundedText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length <= max;
+}
+function isDataKind(kind: string): kind is DataKind {
+  return dataKinds.some((value) => value === kind);
+}
+function draftSetting(kind: StepKind, setting: unknown): string {
+  if (kind === 'javascript') {
+    validateSource(setting, true);
+    return setting;
+  }
+  const limit = isConnectorKind(kind) ? maxConnectorSettingBytes : isDataKind(kind) ? 16_384 : 2048;
+  if (!boundedText(setting, limit)) throw new RequestError('Step settings are too long or missing.');
+  if (isConnectorKind(kind)) {
+    try {
+      return JSON.stringify(parseConnectorSetting(kind, setting, true));
+    } catch (error) {
+      throw new RequestError(error instanceof Error ? error.message : 'Check the connection settings.');
+    }
+  }
+  return setting;
 }
 export function validateSource(source: unknown, allowBlank = false): asserts source is string {
   if (typeof source !== 'string' || utf8ByteLength(source) > maxSourceBytes)
@@ -143,21 +192,22 @@ export function validateDocument(value: unknown): WorkflowDocument {
     )
       throw new RequestError('Step IDs must be unique.');
     ids.add(step.id);
-    if (
-      !Object.hasOwn(kindSettings, step.kind) ||
-      !boundedText(step.name, 100) ||
-      (step.kind !== 'javascript' && !boundedText(step.setting, 2048))
-    ) {
+    if (!Object.hasOwn(kindSettings, step.kind) || !boundedText(step.name, 100)) {
       throw new RequestError('Check the step type, name and settings.');
     }
-    if (step.kind === 'javascript') validateSource(step.setting, true);
-    return { id: step.id, kind: step.kind, name: step.name, setting: step.setting };
+    return { id: step.id, kind: step.kind, name: step.name, setting: draftSetting(step.kind, step.setting) };
   });
   return { name: doc.name, inputMode: doc.inputMode, sampleInput: doc.sampleInput, steps };
 }
 function validateStepSettings(step: Pick<VisualStep, 'kind' | 'name' | 'setting'>) {
   if (step.kind === 'javascript') validateSource(step.setting);
   if (!step.name.trim()) throw new RequestError('Give each step a name.');
+  try {
+    if (isDataKind(step.kind)) parseDataSetting(step.kind, step.setting);
+    if (isConnectorKind(step.kind)) parseConnectorSetting(step.kind, step.setting);
+  } catch (error) {
+    throw new RequestError(error instanceof Error ? error.message : 'Check the step settings.');
+  }
   if (step.kind === 'format' && !formats.some((mode) => mode === step.setting))
     throw new RequestError('Choose a text format for ' + step.name + '.');
   if (step.kind === 'field' && step.setting.split('.').some((key) => !key.trim()))
@@ -172,14 +222,13 @@ function validateStepSettings(step: Pick<VisualStep, 'kind' | 'name' | 'setting'
 export function validateOperationTest(value: unknown) {
   if (!value || typeof value !== 'object') throw new RequestError('Provide a step and a test input.');
   const { kind, setting, input } = value as { kind?: unknown; setting?: unknown; input?: unknown };
-  if (
-    (kind !== 'format' && kind !== 'compose' && kind !== 'field' && kind !== 'wait') ||
-    !boundedText(setting, 2048)
-  )
+  if (typeof kind !== 'string' || kind === 'javascript' || !Object.hasOwn(kindSettings, kind))
     throw new RequestError('Choose a supported step and its settings.');
-  validateStepSettings({ kind, name: kindSettings[kind].name, setting });
+  const operation = kind as Exclude<StepKind, 'javascript'>;
+  const normalized = draftSetting(operation, setting);
+  validateStepSettings({ kind: operation, name: kindSettings[operation].name, setting: normalized });
   assertTestInput(input);
-  return { kind, setting, input };
+  return { kind: operation, setting: normalized, input };
 }
 export function validateForRun(value: WorkflowDocument, testInput?: JsonValue): JsonValue {
   const doc = validateDocument(value);

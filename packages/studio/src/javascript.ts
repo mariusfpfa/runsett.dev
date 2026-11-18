@@ -5,9 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { DEFAULT_EXECUTION_LIMITS, ExecutionError, type JsonValue } from '@runsett/contracts';
-import { createCodeExecutor, ModuleRegistry, type RegisteredModule } from '@runsett/runner';
+import { createCodeExecutor, ModuleRegistry, type CredentialSource, type RegisteredModule } from '@runsett/runner';
 import { DeploymentRegistry, ReconciliationAudit, type RegisteredDeployment } from '@runsett/runtime';
-import { javaScriptBlock } from './block.js';
+import { connectorBinding, connectorBlock, javaScriptBlock } from './block.js';
+import { isConnectorKind } from './connector-settings.js';
 import { validateSource, type StepTestResult, type VisualStep } from './model.js';
 
 const exec = promisify(execFile);
@@ -79,14 +80,28 @@ export async function packageJavaScript(baseImage: string, source: string): Prom
   return { moduleId: 'studio-js-' + moduleHash, moduleHash, path: modulePath, image: await build };
 }
 
-export async function prepareScriptDeployment(
+export async function prepareStudioDeployment(
   registry: DeploymentRegistry,
   base: RegisteredDeployment,
   sources: Map<string, string>,
+  steps: VisualStep[] = [],
+  network = 'bridge',
 ): Promise<RegisteredDeployment> {
-  if (!sources.size) return base;
+  const connector = base.modules.find((module) => module.moduleId === 'studio-connector');
+  const actions = new Map<string, ReturnType<typeof connectorBlock>>();
+  for (const { kind, setting } of steps) {
+    if (!isConnectorKind(kind)) continue;
+    if (!connector) throw new Error('The Studio connector module is unavailable.');
+    const binding = connectorBinding(kind, setting);
+    const key = kind + '/' + (binding ?? '');
+    if (!actions.has(key)) actions.set(key, connectorBlock(connector.moduleHash, kind, binding));
+  }
+  if (!sources.size && !actions.size) return base;
   const hashes = [...sources.keys()].sort();
-  const deploymentId = 'studio-js-' + hash(JSON.stringify([base.fingerprint, hashes])).slice(0, 24);
+  const actionKeys = [...actions.keys()].sort();
+  const deploymentId = actions.size
+    ? 'studio-plan-' + hash(JSON.stringify([base.fingerprint, hashes, actionKeys, network])).slice(0, 24)
+    : 'studio-js-' + hash(JSON.stringify([base.fingerprint, hashes])).slice(0, 24);
   try {
     return await registry.read(deploymentId);
   } catch (error) {
@@ -101,10 +116,13 @@ export async function prepareScriptDeployment(
     workflowTypes: base.workflowTypes,
     workflowBundle: base.workflowBundle,
     dependencyHash: base.dependencyHash,
-    blocks: [...base.blocks, ...hashes.map(javaScriptBlock)],
+    blocks: [...base.blocks, ...hashes.map(javaScriptBlock), ...actionKeys.map((key) => actions.get(key)!)],
     modules,
+    ...(actions.size ? { configuredNetwork: network } : {}),
   });
 }
+
+export { prepareStudioDeployment as prepareScriptDeployment };
 
 export async function testJavaScript(
   baseImage: string,
@@ -122,12 +140,14 @@ export async function testModule(
   input: JsonValue,
   auditDirectory: string,
   signal: AbortSignal,
+  connection?: { network: string; credentials: Record<string, CredentialSource> },
 ): Promise<StepTestResult> {
   signal.throwIfAborted();
   const execute = createCodeExecutor({
     registry: new ModuleRegistry([module]),
     scope: 'studio-js-tests',
     onReconciliation: new ReconciliationAudit(auditDirectory).acknowledge,
+    ...(connection ? { configuredNetwork: connection.network, credentials: connection.credentials } : {}),
   });
   const id = randomUUID();
   const start = Date.now();
@@ -145,8 +165,8 @@ export async function testModule(
         moduleId: module.moduleId,
         moduleHash: module.moduleHash,
         input,
-        networkMode: 'none',
-        credentialBindings: [],
+        networkMode: connection ? 'configured' : 'none',
+        credentialBindings: Object.keys(connection?.credentials ?? {}),
         limits: DEFAULT_EXECUTION_LIMITS,
       },
       signal,

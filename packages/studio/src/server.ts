@@ -6,14 +6,25 @@ import { fileURLToPath } from 'node:url';
 import { StudioEngine, root, namespace } from './engine.js';
 import { maxTestInputBytes, RequestError, uuid, type WorkflowDocument } from './model.js';
 import { StudioStore } from './store.js';
+import { StudioConnections } from './connections.js';
+import { handleOAuthRoutes } from './oauth-routes.js';
+import { StudioTriggers } from './triggers.js';
 
 const port = Number(process.env.RUNSETT_STUDIO_PORT ?? 4310);
 const data = process.env.RUNSETT_STUDIO_DIR ?? join(root, '.runsett/studio');
 const assets = fileURLToPath(new URL('./public/', import.meta.url));
 await mkdir(data, { recursive: true, mode: 0o700 });
-const store = new StudioStore(join(data, 'workspace.sqlite'));
+const workspaceFile = join(data, 'workspace.sqlite');
+const store = new StudioStore(workspaceFile);
 store.seed();
-const engine = new StudioEngine(store);
+const connections = new StudioConnections(join(data, 'connections.sqlite'));
+const engine = new StudioEngine(store, connections);
+const triggers = new StudioTriggers(workspaceFile, {
+  getWorkflow: (id) => store.get(id),
+  getSubmissionRevision: (id, requestId) => store.getSubmission('studio-' + id + '-' + requestId)?.revision,
+  isAvailable: () => engine.status === 'online',
+  run: (...args) => engine.run(...args),
+});
 const shutdownSignal = new AbortController();
 const health = () => ({ status: engine.status, message: engine.message });
 
@@ -45,7 +56,10 @@ const app = createServer(async (req, res) => {
     if (host !== 'localhost:' + port && host !== '127.0.0.1:' + port)
       throw new RequestError('Use the local Studio address.', 403);
     const origin = 'http://' + host;
-    if (req.headers.origin && req.headers.origin !== origin)
+    const url = new URL(req.url ?? '/', origin);
+    if (url.origin !== origin) throw new RequestError('Use the local Studio address.', 403);
+    const callback = req.method === 'GET' && /^\/api\/oauth\/(slack|teams)\/callback$/.test(url.pathname);
+    if (req.headers.origin && req.headers.origin !== origin && !callback)
       throw new RequestError('Use Studio to make this change.', 403);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -53,9 +67,25 @@ const app = createServer(async (req, res) => {
       'Content-Security-Policy',
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
-    const url = new URL(req.url ?? '/', origin);
     const path = url.pathname;
     const method = req.method;
+    if (method === 'GET' && path === '/' && url.hostname === '127.0.0.1') {
+      // Provider callbacks and the editor must share a browser cookie host.
+      url.hostname = 'localhost';
+      res.writeHead(302, { Location: url.href, 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+    if (await handleOAuthRoutes(req, res, url, connections.oauth, body, json)) return;
+    const hook = /^\/hooks\/([^/]+)\/([A-Za-z0-9_-]{43})$/.exec(path);
+    if (hook && uuid(hook[1]) && method === 'POST') {
+      triggers.assertWebhook(hook[1], hook[2]!);
+      const input = await body(req, maxTestInputBytes);
+      return json(res, 202, await triggers.webhook(hook[1], hook[2]!, input, req.headers['idempotency-key']));
+    }
+    if (path === '/api/connections') {
+      if (method === 'GET') return json(res, 200, connections.list());
+      if (method === 'POST') return json(res, 201, connections.create(await body(req, 24 * 1024)));
+    }
     if (path === '/api/workspace' && method === 'GET')
       return json(res, 200, { workflows: store.list(), engine: health(), namespace });
     if (path === '/api/engine' && method === 'GET') {
@@ -97,9 +127,13 @@ const app = createServer(async (req, res) => {
       if (!res.destroyed) json(res, 200, result);
       return;
     }
-    const workflow = /^\/api\/workflows\/([^/]+)(\/runs|\/run-options)?$/.exec(path);
+    const workflow = /^\/api\/workflows\/([^/]+)(\/runs|\/run-options|\/triggers)?$/.exec(path);
     if (workflow && uuid(workflow[1])) {
       const id = workflow[1];
+      if (workflow[2] === '/triggers') {
+        if (method === 'GET') return json(res, 200, triggers.get(id));
+        if (method === 'PUT') return json(res, 200, triggers.update(id, await body(req, 4096)));
+      }
       if (workflow[2] === '/run-options' && method === 'GET')
         return json(res, 200, await engine.history(id, true));
       if (!workflow[2] && method === 'PUT') {
@@ -175,16 +209,21 @@ app.listen(port, '127.0.0.1', () => {
     });
   }
   engine.start();
+  triggers.start();
 });
 let closing = false;
 function shutdown() {
   if (closing) return;
   closing = true;
   shutdownSignal.abort();
+  const triggersStopped = triggers.close();
   app.close(() => {
-    void engine
-      .stop()
-      .finally(() => store.close())
+    void triggersStopped
+      .finally(() => engine.stop())
+      .finally(() => {
+        connections.close();
+        store.close();
+      })
       .catch((error) => {
         console.error(error);
         process.exitCode = 1;

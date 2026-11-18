@@ -1,21 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, Check, CircleDot, Focus, GitBranch, GripVertical, Minus, Plus } from 'lucide-react';
 import { maxSteps, type VisualStep, type WorkflowDocument } from '../src/model.js';
-import { IconButton, Tile, kinds, subtitle, type NodeKind } from './ui.js';
+import type { ConnectionSummary } from '../src/connector-settings.js';
+import type { TriggerSettings } from '../src/triggers.js';
+import { enabledTriggers, intervalLabel } from './Triggers.js';
+import { IconButton, Tile, kinds, subtitle, type NodeKind, type TriggerKind } from './ui.js';
 
 type Props = {
   doc: WorkflowDocument;
   selection: string;
+  triggerKind: TriggerKind;
+  triggers: TriggerSettings | null;
+  connections: ConnectionSummary[];
+  onTrigger(kind: TriggerKind): void;
   onSelect(id: string): void;
   onInsert(index: number): void;
   onMove(stepId: string, index: number): void;
 };
-export function Canvas({ doc, selection, onSelect, onInsert, onMove }: Props) {
+export function Canvas({
+  doc,
+  selection,
+  triggerKind,
+  triggers,
+  connections,
+  onTrigger,
+  onSelect,
+  onInsert,
+  onMove,
+}: Props) {
   const [zoom, setZoom] = useState(1);
   const [dragging, setDragging] = useState('');
   const [over, setOver] = useState('');
   const stage = useRef<HTMLDivElement>(null);
   const flow = useRef<HTMLDivElement>(null);
+  const starts = enabledTriggers(triggers);
   useEffect(() => {
     const node = flow.current?.querySelector<HTMLButtonElement>('[aria-pressed="true"]');
     if (node && stage.current) {
@@ -35,7 +53,7 @@ export function Canvas({ doc, selection, onSelect, onInsert, onMove }: Props) {
         Math.min(
           1,
           (stage.current.clientHeight - 105) / flow.current.offsetHeight,
-          (stage.current.clientWidth - 36) / 320,
+          (stage.current.clientWidth - 36) / flow.current.offsetWidth,
         ),
       ),
     );
@@ -87,7 +105,7 @@ export function Canvas({ doc, selection, onSelect, onInsert, onMove }: Props) {
         ].join(' ')}
         aria-label={title + ', ' + kinds[kind].label}
         aria-pressed={selected}
-        onClick={() => onSelect(id)}
+        onClick={() => (id === 'trigger' ? onTrigger('trigger') : onSelect(id))}
         draggable={!!step}
         onDragStart={(e) => {
           if (step) {
@@ -157,16 +175,59 @@ export function Canvas({ doc, selection, onSelect, onInsert, onMove }: Props) {
       <div className="canvas-scroll" ref={stage}>
         <div className="flow-position">
           <div className="flow" ref={flow} style={{ zoom }}>
-            {card(
-              'trigger',
-              'trigger',
-              'Manual trigger',
-              doc.inputMode === 'json' ? 'JSON input' : 'Text input',
+            {starts.length === 1 ? (
+              card(
+                'trigger',
+                'trigger',
+                'Manual trigger',
+                doc.inputMode === 'json' ? 'JSON input' : 'Text input',
+              )
+            ) : (
+              <div
+                className={
+                  'flow-card node-trigger trigger-group' + (selection === 'trigger' ? ' selected' : '')
+                }
+                role="group"
+                aria-label="Workflow triggers"
+              >
+                <span className="node-category">Start on any trigger</span>
+                {starts.map((kind) => (
+                  <button
+                    type="button"
+                    key={kind}
+                    aria-label={kinds[kind].name + ', Trigger'}
+                    aria-pressed={selection === 'trigger' && triggerKind === kind}
+                    onClick={() => onTrigger(kind)}
+                  >
+                    <Tile kind={kind} small />
+                    <span className="node-copy">
+                      <strong>{kinds[kind].name}</strong>
+                      <span className="node-detail">
+                        {kind === 'webhook'
+                          ? 'Incoming JSON request'
+                          : kind === 'schedule'
+                            ? intervalLabel(triggers!.schedule.intervalMinutes)
+                            : doc.inputMode === 'json'
+                              ? 'JSON input'
+                              : 'Text input'}
+                      </span>
+                    </span>
+                    <CircleDot size={13} />
+                  </button>
+                ))}
+              </div>
             )}
             {doc.steps.map((step, i) => (
               <div className="flow-unit" key={step.id}>
                 {link(i)}
-                {card(step.id, step.kind, step.name || 'Untitled step', subtitle(step), step, i + 1)}
+                {card(
+                  step.id,
+                  step.kind,
+                  step.name || 'Untitled step',
+                  subtitle(step, connections),
+                  step,
+                  i + 1,
+                )}
               </div>
             ))}
             {link(doc.steps.length)}

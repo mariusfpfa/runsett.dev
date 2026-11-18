@@ -4,6 +4,7 @@ import type { JsonValue } from '@runsett/contracts';
 import {
   ArrowUpRight,
   Blocks,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -35,10 +36,12 @@ import {
 } from '../src/model.js';
 import { Canvas } from './Canvas.js';
 import { Inspector } from './Inspector.js';
+import { useConnections } from './ConnectorFields.js';
+import { enabledTriggers, useWorkflowTriggers } from './Triggers.js';
 import { StepTestDialog } from './StepTestDialog.js';
 import { NewWorkflow, StepLibrary } from './Dialogs.js';
 import { ResultDialog, RunHistory } from './Runs.js';
-import { IconButton } from './ui.js';
+import { IconButton, type TriggerKind } from './ui.js';
 import { api, message, useWorkspace } from './workspace.js';
 import './studio.css';
 
@@ -49,6 +52,15 @@ function App() {
   const [page, setPage] = useState<'editor' | 'history'>('editor');
   const [tab, setTab] = useState<'canvas' | 'runs'>('canvas');
   const [selection, setSelection] = useState('trigger');
+  const [triggerKind, setTriggerKind] = useState<TriggerKind>('trigger');
+  const triggers = useWorkflowTriggers(saved?.id, ws.flush);
+  const activeTriggers = enabledTriggers(triggers.data);
+  const connections = useConnections(
+    !!doc?.steps.some((step) => ['http', 'slack', 'teams'].includes(step.kind)),
+  );
+  const [invalidFields, setInvalidFields] = useState(0);
+  const markInvalid = useCallback((change: 1 | -1) => setInvalidFields((value) => value + change), []);
+  const saveStatus = invalidFields > 0 ? 'Check step settings' : ws.saveState;
   const [panel, setPanel] = useState(() => window.innerWidth > 940);
   const [sidebar, setSidebar] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -68,6 +80,7 @@ function App() {
   const renameCancelled = useRef(false);
   useEffect(() => {
     setSelection(saved?.document.steps[0]?.id ?? 'trigger');
+    setTriggerKind('trigger');
     setTestId('');
     setRenaming(false);
     setPanel(window.innerWidth > 940);
@@ -99,6 +112,12 @@ function App() {
   function select(id: string) {
     setSelection(id);
     setPanel(true);
+  }
+  function configureTrigger(kind: TriggerKind) {
+    setTriggerKind(kind);
+    setInsertion(null);
+    editor();
+    select('trigger');
   }
   function insert(kind: StepKind) {
     if (!doc || insertion === null || doc.steps.length >= maxSteps) return;
@@ -137,6 +156,10 @@ function App() {
   }
   const run = useCallback(
     async (testInput?: JsonValue) => {
+      if (invalidFields > 0) {
+        ws.setError('Finish editing the highlighted step settings before running the workflow.');
+        return;
+      }
       if (inFlight.current || ws.engine.status !== 'online') {
         if (testInput !== undefined)
           throw new Error(inFlight.current ? 'A workflow run is already starting.' : ws.engine.message);
@@ -170,7 +193,7 @@ function App() {
         setSubmitting(false);
       }
     },
-    [ws],
+    [ws, invalidFields],
   );
   useEffect(() => {
     const shortcut = (e: KeyboardEvent) => {
@@ -251,12 +274,7 @@ function App() {
               <History size={18} />
               <span>Run history</span>
             </button>
-            <button
-              title="Step library"
-              className="nav-item"
-              disabled={!doc || doc.steps.length >= maxSteps}
-              onClick={library}
-            >
+            <button title="Step library" className="nav-item" disabled={!doc} onClick={library}>
               <Blocks size={18} />
               <span>Step library</span>
             </button>
@@ -353,11 +371,11 @@ function App() {
           <div className="top-actions">
             {page === 'editor' && (
               <span
-                className={'save-indicator' + (ws.saveState === 'Saved' ? '' : ' pending-save')}
-                title={ws.saveState === 'Saved' ? 'All changes saved' : ws.saveState}
+                className={'save-indicator' + (saveStatus === 'Saved' ? '' : ' pending-save')}
+                title={saveStatus === 'Saved' ? 'All changes saved' : saveStatus}
               >
-                {ws.saveState === 'Saved' ? <CircleCheck size={15} /> : <Clock3 size={15} />}
-                <span>{ws.saveState === 'Saved' ? 'All changes saved' : ws.saveState}</span>
+                {saveStatus === 'Saved' ? <CircleCheck size={15} /> : <Clock3 size={15} />}
+                <span>{saveStatus === 'Saved' ? 'All changes saved' : saveStatus}</span>
               </span>
             )}
             <button className="btn btn-light compact-new" onClick={() => setCreating(true)}>
@@ -432,9 +450,16 @@ function App() {
                     </>
                   ) : (
                     <>
-                      <span className="heading-meta">
-                        <Radio size={13} /> Manual trigger
-                      </span>
+                      <button
+                        className="heading-meta"
+                        aria-label="Configure workflow triggers"
+                        title="Configure workflow triggers"
+                        onClick={() => configureTrigger(triggerKind)}
+                      >
+                        <Radio size={13} />{' '}
+                        {activeTriggers.length === 1 ? 'Manual trigger' : activeTriggers.length + ' triggers'}{' '}
+                        <ChevronDown size={11} />
+                      </button>
                       <b>·</b>
                       <span>
                         {doc.steps.length} {doc.steps.length === 1 ? 'step' : 'steps'}
@@ -448,13 +473,13 @@ function App() {
                   <button
                     className="btn btn-light"
                     onClick={() => setTestId('trigger')}
-                    disabled={submitting}
+                    disabled={submitting || invalidFields > 0}
                   >
                     Test with input…
                   </button>
                   <button
                     className="btn btn-primary run-button"
-                    disabled={submitting || ws.engine.status !== 'online'}
+                    disabled={submitting || ws.engine.status !== 'online' || invalidFields > 0}
                     onClick={() => void run()}
                     title="Run workflow (Ctrl or ⌘ Enter)"
                   >
@@ -496,6 +521,10 @@ function App() {
                       key={saved.id}
                       doc={doc}
                       selection={selection}
+                      triggerKind={triggerKind}
+                      triggers={triggers.data}
+                      connections={connections.list}
+                      onTrigger={configureTrigger}
                       onSelect={select}
                       onMove={move}
                       onInsert={setInsertion}
@@ -508,8 +537,16 @@ function App() {
                           onClick={() => setPanel(false)}
                         />
                         <Inspector
+                          key={saved.id}
+                          workflowId={saved.id}
                           doc={doc}
                           selection={selection}
+                          triggerKind={triggerKind}
+                          triggers={triggers}
+                          configureTrigger={configureTrigger}
+                          connections={connections}
+                          invalidDraft={invalidFields > 0}
+                          markInvalid={markInvalid}
                           edit={ws.edit}
                           select={select}
                           move={move}
@@ -545,13 +582,22 @@ function App() {
           }}
         />
       )}
-      {insertion !== null && <StepLibrary close={() => setInsertion(null)} insert={insert} />}
+      {insertion !== null && doc && (
+        <StepLibrary
+          close={() => setInsertion(null)}
+          insert={insert}
+          configureTrigger={configureTrigger}
+          activeTriggers={activeTriggers}
+          stepsFull={doc.steps.length >= maxSteps}
+        />
+      )}
       {(testStep || testId === 'trigger') && doc && saved && (
         <StepTestDialog
           key={saved.id + '/' + testId}
           step={testStep ?? null}
           workflowId={saved.id}
           document={doc}
+          connections={connections.list}
           engine={ws.engine}
           saveState={ws.saveState}
           saveError={ws.error}

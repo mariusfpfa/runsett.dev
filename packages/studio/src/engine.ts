@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { assertJsonValue, DEFAULT_EXECUTION_LIMITS, type JsonValue } from '@runsett/contracts';
+import type { CredentialSource } from '@runsett/runner';
 import { Client, Connection, WorkflowNotFoundError } from '@temporalio/client';
 import { bundleWorkflowCode } from '@temporalio/worker';
 import {
@@ -16,14 +17,18 @@ import {
   inspectRun,
   type RegisteredDeployment,
 } from '@runsett/runtime';
-import { visualBlock } from './block.js';
-import { pinSources, prepareScriptDeployment, testJavaScript, testModule } from './javascript.js';
+import { connectorBinding, visualBlock } from './block.js';
+import { isConnectorKind } from './connector-settings.js';
+import type { StudioConnections } from './connections.js';
+import { pinSources, prepareStudioDeployment, testJavaScript, testModule } from './javascript.js';
 import {
   assertTestInput,
   RequestError,
   validateForRun,
   validateOperationTest,
   validateStepTest,
+  triggerName,
+  type AutomaticTrigger,
   type RecordedRunRef,
   type RecordedStepOutput,
   type RunInput,
@@ -38,10 +43,28 @@ const deployments = new DeploymentRegistry(
   process.env.RUNSETT_DEPLOYMENTS_DIR ?? join(root, '.runsett/deployments'),
 );
 const auditDirectory = process.env.RUNSETT_AUDIT_DIR ?? join(root, '.runsett/audit');
+const connectorNetwork = process.env.RUNSETT_STUDIO_NETWORK ?? 'bridge';
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
+
+function runPlan(
+  input: RunInput,
+  deployment: RegisteredDeployment,
+  pinnedSteps = pinSources(input.steps).steps,
+) {
+  const connector = deployment.modules.find((module) => module.moduleId === 'studio-connector');
+  return {
+    ...input,
+    steps: pinnedSteps,
+    moduleHash: deployment.modules[0]!.moduleHash,
+    ...(connector && input.steps.some((step) => isConnectorKind(step.kind))
+      ? { connectorHash: connector.moduleHash }
+      : {}),
+  };
+}
 
 async function prepareDeployment() {
   const moduleHash = hash(await readFile(join(root, 'packages/studio/modules/operation.mjs')));
+  const connectorHash = hash(await readFile(join(root, 'packages/studio/modules/connector.mjs')));
   const dependencyHash = hash(await readFile(join(root, 'package-lock.json')));
   const [{ stdout }, bundle] = await Promise.all([
     exec(
@@ -77,6 +100,12 @@ async function prepareDeployment() {
     blocks: [visualBlock(moduleHash)],
     modules: [
       { moduleId: 'studio-operation', moduleHash, path: '/opt/runsett/modules/operation.mjs', image },
+      {
+        moduleId: 'studio-connector',
+        moduleHash: connectorHash,
+        path: '/opt/runsett/modules/connector.mjs',
+        image,
+      },
     ],
   });
 }
@@ -95,7 +124,16 @@ export class StudioEngine {
   private maintenanceTimer?: NodeJS.Timeout;
   private maintenance?: Promise<void>;
   private testing = false;
-  constructor(private readonly store: StudioStore) {}
+  constructor(
+    private readonly store: StudioStore,
+    private readonly connections?: StudioConnections,
+  ) {}
+
+  private credentials(ids: string[]): Record<string, CredentialSource> {
+    if (!ids.length) return {};
+    if (!this.connections) throw new RequestError('Studio connections are unavailable.', 503);
+    return this.connections.getCredentials([...new Set(ids)]);
+  }
 
   start() {
     if (this.status === 'online' || this.starting || this.stopping) return;
@@ -150,7 +188,8 @@ export class StudioEngine {
     }
     const pending = this.launching.get(id);
     if (pending) return pending;
-    const start = createRunsettWorker({ deployment, auditDirectory, address, namespace })
+    const credentials = this.credentials(deployment.blocks.flatMap((block) => block.credentialBindings));
+    const start = createRunsettWorker({ deployment, auditDirectory, address, namespace, credentials })
       .then((handle) => {
         const finished = handle
           .run()
@@ -187,7 +226,7 @@ export class StudioEngine {
       for await (const info of client.workflow.list({ query })) {
         const memo = info.memo?.runsettRequest as { deploymentId?: unknown } | undefined;
         const id = memo?.deploymentId ?? this.store.getSubmission(info.workflowId)?.deploymentId;
-        if (typeof id === 'string' && /^studio-(?:engine|js)-[a-f0-9]{24}$/.test(id)) ids.add(id);
+        if (typeof id === 'string' && /^studio-(?:engine|js|plan)-[a-f0-9]{24}$/.test(id)) ids.add(id);
       }
       return ids;
     });
@@ -242,7 +281,13 @@ export class StudioEngine {
       throw new RequestError('The engine is ' + this.status + '. ' + this.message, 503);
     return this.client;
   }
-  async run(id: string, revision: number, requestId: string, testInput?: JsonValue) {
+  async run(
+    id: string,
+    revision: number,
+    requestId: string,
+    testInput?: JsonValue,
+    trigger?: AutomaticTrigger,
+  ) {
     const client = this.connected();
     const previous = this.store.getSubmission('studio-' + id + '-' + requestId);
     let deployment: RegisteredDeployment;
@@ -253,34 +298,46 @@ export class StudioEngine {
       if (workflow.revision !== revision)
         throw new RequestError('Save your latest changes before running this workflow.', 409);
       const value = validateForRun(workflow.document, testInput);
-      const pinned = pinSources(workflow.document.steps);
-      if (testInput !== undefined) {
-        try {
-          assertJsonValue(
-            {
-              name: workflow.document.name,
-              revision,
-              value,
-              steps: pinned.steps,
-              moduleHash: this.current!.modules[0]!.moduleHash,
-            },
-            DEFAULT_EXECUTION_LIMITS.inputBytes,
-          );
-        } catch {
-          throw new RequestError('The test input and workflow plan together must fit within 1 MiB.');
-        }
+      const { name, steps } = workflow.document;
+      const pinned = pinSources(steps);
+      try {
+        const plan = runPlan(
+          { name, revision, value, steps, ...(trigger ? { trigger } : {}) },
+          this.current!,
+          pinned.steps,
+        );
+        assertJsonValue(plan, DEFAULT_EXECUTION_LIMITS.inputBytes);
+      } catch {
+        throw new RequestError('The input and workflow plan together must fit within 1 MiB.');
       }
-      deployment = await prepareScriptDeployment(deployments, this.current!, pinned.sources);
+      // Fail a missing connection before recording a run or building any authored code.
+      this.credentials(
+        steps.flatMap((step) => {
+          if (!isConnectorKind(step.kind)) return [];
+          const binding = connectorBinding(step.kind, step.setting);
+          return binding ? [binding] : [];
+        }),
+      );
+      deployment = await prepareStudioDeployment(
+        deployments,
+        this.current!,
+        pinned.sources,
+        steps,
+        connectorNetwork,
+      );
     }
-    const submission = this.store.prepareRun(id, revision, requestId, deployment.deploymentId, testInput);
+    const submission = this.store.prepareRun(
+      id,
+      revision,
+      requestId,
+      deployment.deploymentId,
+      testInput,
+      trigger,
+    );
     if (submission.deploymentId !== deployment.deploymentId)
       deployment = await deployments.read(submission.deploymentId);
     await this.ensureWorker(deployment);
-    const input = {
-      ...submission.input,
-      steps: pinSources(submission.input.steps).steps,
-      moduleHash: deployment.modules[0]!.moduleHash,
-    };
+    const input = runPlan(submission.input, deployment);
     return client.connection.withDeadline(Date.now() + 12_000, () =>
       createRunClient({ client, deployments }).startRun({
         workflowId: submission.id,
@@ -306,6 +363,15 @@ export class StudioEngine {
         return await testJavaScript(module.image, test.source, test.input, auditDirectory, signal);
       const input = { kind: test.kind, setting: test.setting, value: test.input };
       assertTestInput(input);
+      if (isConnectorKind(test.kind)) {
+        const connector = this.current!.modules.find((item) => item.moduleId === 'studio-connector');
+        if (!connector) throw new RequestError('The connector module is unavailable.', 503);
+        const binding = connectorBinding(test.kind, test.setting);
+        return await testModule(connector, input, auditDirectory, signal, {
+          network: connectorNetwork,
+          credentials: this.credentials(binding ? [binding] : []),
+        });
+      }
       return await testModule(module, input, auditDirectory, signal);
     } finally {
       this.testing = false;
@@ -329,6 +395,7 @@ export class StudioEngine {
           startedAt: info.startTime,
           finishedAt: info.closeTime,
           revision: submission?.revision,
+          ...(submission ? { triggerName: triggerName(submission.input.trigger) } : {}),
           ...(includeSteps && submission
             ? { steps: submission.input.steps.map(({ id, name }) => ({ id, name })) }
             : {}),
@@ -361,7 +428,8 @@ export class StudioEngine {
       const origin = { runId: run.runId, revision: submission.revision };
       // Visibility has already verified this pair when searching recent runs. An explicit
       // selection must also verify the execution before returning a saved trigger input.
-      if (stepId === 'trigger' && !selected) return { ...origin, stepName: 'Manual trigger', value: trigger };
+      if (stepId === 'trigger' && !selected)
+        return { ...origin, stepName: triggerName(submission.input.trigger), value: trigger };
       const index = steps.findIndex((step) => step.id === stepId);
       const step = steps[index];
       if (!step && stepId !== 'trigger' && stepId !== 'output') continue;
@@ -380,7 +448,8 @@ export class StudioEngine {
         throw e;
       }
       partial ||= report.partial;
-      if (stepId === 'trigger') return { ...origin, stepName: 'Manual trigger', value: trigger };
+      if (stepId === 'trigger')
+        return { ...origin, stepName: triggerName(submission.input.trigger), value: trigger };
       if (stepId === 'output') {
         if (report.state !== 'COMPLETED' || report.output === undefined) continue;
         assertTestInput(report.output);
@@ -452,6 +521,7 @@ export class StudioEngine {
           state: report.state,
           name: plan?.name ?? report.workflowType,
           revision: plan?.revision,
+          ...(plan ? { triggerName: triggerName(plan.trigger) } : {}),
           input: plan ? plan.value : report.input,
           output: report.output,
           error: report.error,

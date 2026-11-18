@@ -9,8 +9,74 @@ The runtime runs on your own infrastructure without a vendor account.
 
 Runsett Studio is the local browser editor. Create a workflow, add and configure
 steps on the canvas, and select **Run workflow** to see the execution and output.
-Studio includes text formatting, message templates, JSON field selection,
-durable waits, and JavaScript. The **Welcome message** workflow is ready to try.
+Open **Step library** to search the available nodes. The **Welcome message**
+workflow is ready to try.
+
+| Node | What it does |
+| --- | --- |
+| Manual trigger | Starts on demand with the saved text or JSON input. |
+| Schedule | Starts at a recurring interval in minutes using the saved input. |
+| Webhook | Starts a run from the JSON body sent to its private local POST URL. |
+| HTTP request | Sends GET, POST, PUT, PATCH, or DELETE and returns the status and response body. |
+| Send Slack message | Posts as the signed-in Slack user to a channel selected from their workspace. |
+| Send Teams message | Posts as the signed-in Microsoft user to a channel in one of their teams. |
+| Parse JSON / Read field | Converts JSON text to a value or reads a dotted field path. |
+| Set field / Filter list | Sets a nested object field or keeps array items matching a JSON value. |
+| Choose value | Compares an input field and returns one of two configured values. |
+| Format text / Compose message | Formats a string or inserts the previous value into a message. |
+| Wait / JavaScript | Waits for a duration or runs a custom JavaScript function. |
+
+Each workflow can have a manual, schedule, and webhook trigger active together.
+Open the trigger in the library to configure it. Enabling a webhook creates a
+private URL. Send JSON with `Content-Type: application/json` and optionally an
+`Idempotency-Key` to reuse the same submission when retrying a request.
+Disabling the webhook revokes that URL. Studio listens on loopback. A service
+on another machine needs a route to the webhook endpoint.
+
+Schedules run while Studio and the engine are online. The scheduler stores the
+next occurrence on disk. On restart it can submit one missed occurrence and
+then resumes the configured interval. Run history and the recorded-input picker
+show which trigger started the run.
+
+To send a message, add **Send Slack message** or **Send Teams message** in the
+step library. Sign in from the step inspector, then choose the channel. For
+Teams, choose a team first. Enter a message and use `{{value}}` anywhere you
+want the previous step’s output. The live test in the step inspector sends one
+message to that channel.
+
+The first sign-in for each provider requires a public application client ID.
+The setup dialog shows the exact localhost redirect URL for this Studio instance.
+
+- **Slack** — Select **Create a Slack app for Runsett**, choose your workspace,
+  and confirm the prefilled app. It includes the redirect URL, PKCE, and the
+  `channels:read`, `groups:read`, and `chat:write` user scopes. Copy the
+  **Client ID** from **Basic Information** and paste it into Studio.
+  [Slack app manifests](https://docs.slack.dev/app-manifests/configuring-apps-with-app-manifests/) ·
+  [Slack desktop authorization](https://docs.slack.dev/authentication/using-pkce/)
+- **Microsoft Teams** — In Microsoft Entra **App registrations**, register an
+  app for accounts in any organizational directory. Under **Authentication**,
+  add the **Mobile and desktop applications** platform with Studio’s redirect
+  URL. Add the Microsoft Graph delegated permissions `User.Read`,
+  `Team.ReadBasic.All`, `Channel.ReadBasic.All`, and `ChannelMessage.Send`,
+  then paste the **Application (client) ID** into Studio. Sign in with a work
+  or school account. Your organization may require administrator consent.
+  [Microsoft desktop app registration](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-registration) ·
+  [Teams channel messaging](https://learn.microsoft.com/en-us/graph/api/channel-post-messages?view=graph-rest-1.0)
+
+Studio keeps provider tokens in its local connection database. Each workflow
+stores a reference to its account and selected channel. You can reuse a signed-in
+account across workflows and reconnect it from the inspector. Previously saved
+incoming-webhook connections still deliver to their configured destinations.
+
+The HTTP node accepts headers, the previous value as a JSON body, or a custom
+text body. For bearer authentication, create a named connection for the API's
+HTTPS origin. Studio attaches that token to requests for that origin. Use
+the header fields for non-secret values. JSON responses are decoded. Other response bodies are
+returned as text. Requests and messages use one attempt, and their individual
+test buttons make a real request. Connectors run on a Docker bridge. Set
+`RUNSETT_STUDIO_NETWORK` to use an existing Docker network when reaching a
+local service by container name. Authored JavaScript and data nodes run with
+networking disabled.
 
 Choose **Add step → JavaScript** to open the code editor. Write an exported
 default function that receives the previous step’s value as `input`. Enter a
@@ -37,7 +103,7 @@ Temporal records executions, including the workflow revision submitted with each
 The first engine milestone implements durable JavaScript execution, schedules,
 inspection, and recovery tests. This is an early foundation, with
 [production readiness work](docs/operations.md) still ahead. Built-in CSV,
-database, HTTP, and Google Sheets connectors and webhook response delivery are
+database, and Google Sheets connectors and custom webhook response delivery are
 planned next.
 
 ## What works today
